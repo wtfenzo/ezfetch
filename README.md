@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/ofcyouritachii/ezfetch)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/wtfenzo/ezfetch)
 
 > A blazing-fast, highly customizable, cross-platform system information tool written in Python.
 
@@ -32,7 +32,7 @@ Inspired by neofetch but with modern features, extensive customization, better p
 
 ```bash
 # Shallow clone for faster download (~2MB vs 25MB)
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
 python3 -m ezfetch
 ```
@@ -43,7 +43,7 @@ python3 -m ezfetch
 
 #### On Arch Linux / Manjaro:
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
 
 # Option 1: Run directly (Recommended - No installation needed)
@@ -59,7 +59,7 @@ pip install --user --break-system-packages -e .
 
 #### On Ubuntu / Debian:
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
 # Install pip if needed
 sudo apt install python3-pip
@@ -70,7 +70,7 @@ ezfetch
 
 #### On macOS:
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
 # pip3 is usually pre-installed
 pip3 install --user -e .
@@ -79,7 +79,7 @@ ezfetch
 
 #### Generic (Works Everywhere):
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
 # Run directly without installation
 python3 -m ezfetch
@@ -253,7 +253,7 @@ ezfetch creates a config file at `~/.config/ezfetch/config.json` which you can c
 
 For the **fastest download**, use shallow clone:
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 ```
 
 **Benefits:**
@@ -423,7 +423,7 @@ sudo apt install python3-psutil
 
 Use shallow clone for faster download:
 ```bash
-git clone --depth 1 https://github.com/ofcyouritachii/ezfetch.git
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 ```
 This downloads only ~2MB instead of 25MB!
 
@@ -439,7 +439,7 @@ Contributions are welcome! Please feel free to:
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-**Issues:** [Report bugs or request features](https://github.com/ofcyouritachii/ezfetch/issues)
+**Issues:** [Report bugs or request features](https://github.com/wtfenzo/ezfetch/issues)
 
 ---
 
@@ -459,8 +459,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🔗 Links
 
-- **Repository:** [github.com/ofcyouritachii/ezfetch](https://github.com/ofcyouritachii/ezfetch)
-- **Issues:** [Bug Reports & Feature Requests](https://github.com/ofcyouritachii/ezfetch/issues)
+- **Repository:** [github.com/wtfenzo/ezfetch](https://github.com/wtfenzo/ezfetch)
+- **Issues:** [Bug Reports & Feature Requests](https://github.com/wtfenzo/ezfetch/issues)
 - **Version:** 1.1.0
 
 ---
