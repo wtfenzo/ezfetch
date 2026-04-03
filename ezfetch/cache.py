@@ -71,19 +71,30 @@ def cached(key: str, ttl: int = 300):
     """Decorator that caches a function's return value to disk.
 
     Skips caching if the result is falsy or 'Unknown'.
-    Respects the 'performance.cache_enabled' config setting.
+    Respects 'performance.cache_enabled' and 'performance.cache_duration'.
     """
     def dec(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            cache_enabled = True
+            effective_ttl = ttl
             try:
                 from .config import get_config
-                if not get_config().get("performance", "cache_enabled", default=True):
-                    return fn(*args, **kwargs)
+                cfg = get_config()
+                cache_enabled = cfg.get("performance", "cache_enabled", default=True)
+                configured_ttl = cfg.get("performance", "cache_duration", default=ttl)
+                try:
+                    effective_ttl = max(0, int(configured_ttl))
+                except (TypeError, ValueError):
+                    effective_ttl = ttl
             except Exception:
                 pass
+
+            if not cache_enabled:
+                return fn(*args, **kwargs)
+
             c = get_cache()
-            v = c.get(key, ttl)
+            v = c.get(key, effective_ttl)
             if v is not None:
                 return v
             result = fn(*args, **kwargs)

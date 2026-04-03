@@ -30,7 +30,10 @@ class Config:
 
     def __init__(self, path: Optional[str] = None) -> None:
         self.file = Path(path) if path else Path.home() / ".config" / "ezfetch" / "config.json"
+        file_existed = self.file.exists()
         self.data: dict = self._load()
+        if not file_existed:
+            self.save()
 
     def _load(self) -> dict:
         cfg = copy.deepcopy(DEFAULTS)
