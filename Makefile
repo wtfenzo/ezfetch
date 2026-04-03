@@ -38,7 +38,7 @@ build: deps
 		echo "[Build] PyInstaller is not installed. Install it with: $$BASE_PY -m pip install --user --break-system-packages pyinstaller"; \
 		exit 1; \
 	fi; \
-	$$PY -m PyInstaller ezfetch.spec --clean
+	$$PY -m PyInstaller --name $(BIN_NAME) --onefile ezfetch/__main__.py --clean
 	@printf '\n[Binary] ready: dist/%s\n' "$(BIN_NAME)"
 	@ls -lh dist/$(BIN_NAME)*
 

@@ -450,9 +450,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Repository:** [github.com/wtfenzo/ezfetch](https://github.com/wtfenzo/ezfetch)
 - **Issues:** [Bug Reports & Feature Requests](https://github.com/wtfenzo/ezfetch/issues)
-<<<<<<< HEAD
-- **Version:** 1.1.0
-=======
 - **Version:** 1.3.0
 
 ---

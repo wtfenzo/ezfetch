@@ -52,7 +52,7 @@ jobs:
           pip install pyinstaller psutil
 
       - name: Build binary
-        run: pyinstaller ezfetch.spec --clean
+        run: pyinstaller --name ezfetch --onefile ezfetch/__main__.py --clean
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
