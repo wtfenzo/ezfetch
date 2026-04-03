@@ -69,7 +69,7 @@ lint: $(PY_FILES)
 	done
 	@echo "[Lint] all $(words $(PY_FILES)) files compile OK"
 
-test:
+test: deps
 	@PY="$(PYTHON)"; \
 	if ! $$PY -c "import psutil" >/dev/null 2>&1; then \
 		PY="$(SYSTEM_PY)"; \
