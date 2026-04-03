@@ -454,7 +454,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Version:** 1.1.0
 =======
 - **Version:** 1.3.0
->>>>>>> 5b477de (feat: mproved distro detection)
 
 ---
 
