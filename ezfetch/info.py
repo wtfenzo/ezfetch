@@ -1,789 +1,547 @@
+"""System information gathering functions for all supported platforms."""
+
 import os
 import platform
+import re
 import socket
-import psutil
 import subprocess
 import time
 import glob
-import shutil
-import ctypes
 import locale
 import shutil
+import json
+from pathlib import Path
+from typing import List, Optional
 
+import psutil
+from .cache import cached
+from .utils import truncate
 
-def get_user_host():
-    return f"{os.getenv('USER') or os.getenv('USERNAME')}@{socket.gethostname()}"
+__all__ = [
+    "get_user_host", "get_host", "get_os", "get_kernel", "get_uptime",
+    "get_packages", "get_shell", "get_resolution", "get_desktop_env",
+    "get_window_manager", "get_terminal", "get_cpu", "get_gpu",
+    "get_memory", "get_swap", "get_disk", "get_ip", "get_battery", "get_locale",
+    "get_color_blocks",
+]
 
+S = platform.system()
+_env = os.environ.get
+_has = lambda c: shutil.which(c) is not None
+_gib = lambda b: round(b / (1 << 30), 2)
+_DMI_GARBAGE = {"to be filled by o.e.m.", "default string", "not specified", "system product name", "none", ""}
 
-def get_host():
+def _cmd(c: str, timeout: int = 5) -> Optional[str]:
+    """Run a shell command and return stripped stdout, or None on failure."""
     try:
-        if platform.system() == "Linux":
-            try:
-                with open("/sys/class/dmi/id/product_name", "r") as f:
-                    product = f.read().strip()
-                with open("/sys/class/dmi/id/product_version", "r") as f:
-                    version = f.read().strip()
-                return f"{product} ({version})"
-            except:
-                return "Unknown"
-        elif platform.system() == "Darwin":
-            try:
-                product = subprocess.check_output(
-                    "sysctl -n hw.model",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                return product
-            except:
-                return "Unknown"
-        elif platform.system() == "Windows":
-            try:
-                output = subprocess.check_output(
-                    "wmic computersystem get model",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                )
-                lines = output.strip().split("\n")[1:]
-                model = [line.strip() for line in lines if line.strip()]
-                return model[0] if model else "Unknown"
-            except:
-                return "Unknown"
-        return "Unknown"
-    except:
-        return "Unknown"
+        return subprocess.check_output(
+            c, shell=True, text=True, stderr=subprocess.DEVNULL, timeout=timeout
+        ).strip()
+    except (subprocess.SubprocessError, OSError):
+        return None
 
 
+def _try(fn, fallback="Unknown"):
+    """Call *fn*; return its result if truthy, otherwise *fallback*."""
+    try:
+        r = fn()
+        return r if r else fallback
+    except Exception:
+        return fallback
+
+
+def _fread(*parts) -> Optional[str]:
+    """Read and strip a file, returning None on any error."""
+    try:
+        return Path(*parts).read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+
+
+def get_user_host() -> str:
+    """Return 'user@hostname' string."""
+    user = _env('USER') or _env('USERNAME', '?')
+    return f"{user}@{socket.gethostname()}"
+
+@cached("host", ttl=3600)
+def get_host() -> str:
+    """Detect the hardware model / product name."""
+    def _do():
+        if S == "Linux":
+            p = _fread("/sys/class/dmi/id/product_name")
+            v = _fread("/sys/class/dmi/id/product_version")
+            if not p or p.lower() in _DMI_GARBAGE:
+                return None
+            if v and v.lower() not in _DMI_GARBAGE:
+                return f"{p} ({v})"
+            return p
+        elif S == "Darwin":
+            return _cmd("sysctl -n hw.model")
+        elif S == "Windows":
+            o = _cmd("wmic computersystem get model")
+            if o:
+                lines = [l.strip() for l in o.split("\n")[1:] if l.strip()]
+                if lines:
+                    return lines[0]
+        return None
+    return _try(_do)
+
+@cached("os", ttl=3600)
 def get_os():
-    if platform.system() == "Linux":
+    """Detect the operating system name and version."""
+    if S == "Linux":
         try:
-            with open("/etc/os-release") as f:
-                for line in f:
-                    if line.startswith("PRETTY_NAME="):
-                        return line.split("=")[1].strip().strip('"')
-        except:
+            with open("/etc/os-release", encoding="utf-8") as f:
+                for l in f:
+                    if l.startswith("PRETTY_NAME="):
+                        return l.split("=", 1)[1].strip().strip('"')
+        except Exception:
             pass
-    return platform.system() + " " + platform.release()
+    elif S == "Darwin":
+        ver = platform.mac_ver()[0]
+        if ver:
+            return f"macOS {ver}"
+    elif S == "Windows":
+        rel = platform.release()
+        edition = platform.win32_edition() if hasattr(platform, 'win32_edition') else ""
+        ver = platform.version()
+        parts = ["Windows", rel]
+        if edition:
+            parts.append(edition)
+        return f"{' '.join(parts)} ({ver})"
+    return f"{S} {platform.release()}"
 
-
+@cached("kernel", ttl=3600)
 def get_kernel():
+    """Return the kernel version string."""
+    if S == "Windows":
+        return platform.version()
     return platform.release()
 
-
 def get_uptime():
-    uptime_seconds = int(time.time() - psutil.boot_time())
-    days, remainder = divmod(uptime_seconds, 86400)
-    hours, remainder = divmod(remainder, 3600)
-    minutes, seconds = divmod(remainder, 60)
+    def _do():
+        s = int(time.time() - psutil.boot_time())
+        d, s = divmod(s, 86400)
+        h, s = divmod(s, 3600)
+        m, _ = divmod(s, 60)
+        parts = []
+        if d: parts.append(f"{d} day{'s' if d > 1 else ''}")
+        if h: parts.append(f"{h} hour{'s' if h > 1 else ''}")
+        parts.append(f"{m} min{'s' if m != 1 else ''}")
+        return ", ".join(parts)
+    return _try(_do)
 
-    if days > 0:
-        return f"{days} days, {hours} hours, {minutes} mins"
-    elif hours > 0:
-        return f"{hours} hours, {minutes} mins"
-    else:
-        return f"{minutes} mins"
-
-
+@cached("packages", ttl=600)
 def get_packages():
-    try:
-        if shutil.which("dpkg"):
-            return (
-                subprocess.check_output(
-                    "dpkg --list | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (dpkg)"
-            )
-        elif shutil.which("rpm"):
-            return (
-                subprocess.check_output(
-                    "rpm -qa | wc -l", shell=True, text=True, stderr=subprocess.DEVNULL
-                ).strip()
-                + " (rpm)"
-            )
-        elif shutil.which("pacman"):
-            return (
-                subprocess.check_output(
-                    "pacman -Q | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (pacman)"
-            )
-        elif shutil.which("apt"):
-            return (
-                subprocess.check_output(
-                    "apt list --installed | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (apt)"
-            )
-        elif shutil.which("dnf"):
-            return (
-                subprocess.check_output(
-                    "dnf list installed | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (dnf)"
-            )
-        elif shutil.which("zypper"):
-            return (
-                subprocess.check_output(
-                    "zypper se --installed-only | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (zypper)"
-            )
-        elif shutil.which("flatpak"):
-            return (
-                subprocess.check_output(
-                    "flatpak list | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (flatpak)"
-            )
-        elif shutil.which("snap"):
-            return (
-                subprocess.check_output(
-                    "snap list | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (snap)"
-            )
-        elif platform.system() == "Darwin":
-            return (
-                subprocess.check_output(
-                    "brew list | wc -l",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                + " (brew)"
-            )
-            return subprocess.check_output("dpkg --list | wc -l", shell=True, text=True).strip() + " (dpkg)"
-        elif shutil.which("rpm"):
-            return subprocess.check_output("rpm -qa | wc -l", shell=True, text=True).strip() + " (rpm)"
-        elif shutil.which("pacman"):
-            return subprocess.check_output("pacman -Qq | wc -l", shell=True, text=True).strip() + " (pacman)"
-        elif shutil.which("apk"):
-            return subprocess.check_output("apk info | wc -l", shell=True, text=True).strip() + " (apk)"
-        elif platform.system() == "Darwin" and shutil.which("brew"):
-            return subprocess.check_output("brew list | wc -l", shell=True, text=True).strip() + " (brew)"
-        else:
-            return "Unknown"
-    except:
-        return "Unknown"
+    """Count installed packages from all detected package managers."""
+    # Order matters: prefer higher-level PMs (dnf/zypper) over rpm
+    managers = [
+        ("pacman", "pacman -Q 2>/dev/null | wc -l"),
+        ("dpkg", "dpkg-query -f '.\n' -W 2>/dev/null | wc -l"),
+        ("dnf", "dnf list installed 2>/dev/null | tail -n +2 | wc -l"),
+        ("zypper", "zypper se --installed-only 2>/dev/null | tail -n +5 | wc -l"),
+        ("rpm", "rpm -qa 2>/dev/null | wc -l"),
+        ("apk", "apk info 2>/dev/null | wc -l"),
+        ("brew", "brew list 2>/dev/null | wc -l"),
+        ("xbps-query", "xbps-query -l 2>/dev/null | wc -l"),
+        ("emerge", "find /var/db/pkg -mindepth 2 -maxdepth 2 -type d 2>/dev/null | wc -l"),
+        ("nix-env", "nix-env -q 2>/dev/null | wc -l"),
+        ("flatpak", "flatpak list 2>/dev/null | wc -l"),
+        ("snap", "snap list 2>/dev/null | tail -n +2 | wc -l"),
+    ]
+    results, seen = [], set()
+    # When a higher-level PM is found, skip its lower-level backend
+    skip_aliases = {"dnf": {"rpm"}, "zypper": {"rpm"}, "rpm": {"dnf", "zypper"}}
+    for name, command in managers:
+        if name in seen or not _has(name):
+            continue
+        seen.add(name)
+        try:
+            out = _cmd(command, timeout=10)
+            if not out:
+                continue
+            n = int(out.strip())
+            if n > 0:
+                results.append(f"{n} ({name})")
+                seen |= skip_aliases.get(name, set())
+        except (ValueError, OSError):
+            continue
+    return ", ".join(results) if results else "Unknown"
 
-
+@cached("shell", ttl=3600)
 def get_shell():
-    shell_path = os.environ.get("SHELL") or os.environ.get("ComSpec", "Unknown")
-    if shell_path != "Unknown":
-        shell_name = os.path.basename(shell_path)
-        try:
-            if shell_name == "zsh":
-                version = (
-                    subprocess.check_output(
-                        "zsh --version",
-                        shell=True,
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    .strip()
-                    .split()[1]
-                )
-                return f"{shell_name} {version}"
-            elif shell_name == "bash":
-                version = (
-                    subprocess.check_output(
-                        "bash --version",
-                        shell=True,
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    .strip()
-                    .split()[3]
-                    .strip("(")
-                    .strip(")")
-                )
-                return f"{shell_name} {version}"
-            elif shell_name == "fish":
-                version = (
-                    subprocess.check_output(
-                        "fish --version",
-                        shell=True,
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    .strip()
-                    .split()[2]
-                )
-                return f"{shell_name} {version}"
-            else:
-                return shell_name
-        except:
-            return shell_name
-    return "Unknown"
+    """Detect the current shell name and version."""
+    path = _env("SHELL") or _env("ComSpec", "")
+    if not path:
+        return "Unknown"
+    name = os.path.basename(path)
+    if S == "Windows":
+        if name.lower().endswith(".exe"):
+            name = name[:-4]
+    ver_cmds = {
+        "zsh": "zsh --version",
+        "bash": "bash --version",
+        "fish": "fish --version",
+        "nu": "nu --version",
+        "elvish": "elvish -version",
+    }
+    if name in ver_cmds:
+        out = _cmd(ver_cmds[name])
+        if out:
+            m = re.search(r'(\d+\.\d+(?:\.\d+)?)', out)
+            if m:
+                return f"{name} {m.group(1)}"
+    return name
 
-
+@cached("resolution", ttl=600)
 def get_resolution():
-    try:
-        if platform.system() == "Linux":
-            # Try Wayland first
-            if os.environ.get("XDG_SESSION_TYPE", "").strip().lower() == "wayland":
-                try:
-                    # Try using hyprctl for Hyprland
-                    if shutil.which("hyprctl"):
-                        output = subprocess.check_output(
-                            "hyprctl monitors",
-                            shell=True,
-                            text=True,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        for line in output.splitlines():
-                            if "1920x1080" in line:
-                                return "1920x1080 @ 60 Hz"
-                            elif "1366x768" in line:
-                                return "1366x768 @ 60 Hz"
-                            elif "2560x1440" in line:
-                                return "2560x1440 @ 60 Hz"
-                            elif "3840x2160" in line:
-                                return "3840x2160 @ 60 Hz"
-                except:
-                    pass
-
-                try:
-                    # Try using swaymsg for Sway
-                    if shutil.which("swaymsg"):
-                        output = subprocess.check_output(
-                            "swaymsg -t get_outputs",
-                            shell=True,
-                            text=True,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        # Parse JSON output for resolution
-                        import json
-
-                        data = json.loads(output)
-                        for output in data:
-                            if output.get("active"):
-                                width = output.get("current_mode", {}).get("width")
-                                height = output.get("current_mode", {}).get("height")
-                                refresh = output.get("current_mode", {}).get("refresh")
-                                if width and height:
-                                    if refresh:
-                                        return f"{width}x{height} @ {refresh} Hz"
-                                    else:
-                                        return f"{width}x{height}"
-                except:
-                    pass
-
-            # Try X11
-            try:
-                out = subprocess.check_output(
-                    "xrandr | grep '*' | awk '{print $1}'",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                )
-                resolutions = list(set(out.strip().split("\n")))
-                if resolutions and resolutions[0]:
-                    # Get refresh rate
-                    try:
-                        refresh_out = subprocess.check_output(
-                            "xrandr | grep '*' | awk '{print $2}'",
-                            shell=True,
-                            text=True,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        refresh = (
-                            refresh_out.strip()
-                            .split("\n")[0]
-                            .replace("*", "")
-                            .replace("+", "")
-                        )
-                        return f"{resolutions[0]} @ {refresh}"
-                    except:
-                        return resolutions[0]
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
-
-            # fallbacks
-            try:
-                for fb in glob.glob("/sys/class/graphics/fb*/modes"):
-                    with open(fb, "r") as f:
-                        mode = f.read().strip()
-                        if mode:
-                            return mode
-            except:
-                pass
-
-            try:
-                with open("/proc/fb", "r") as f:
-                    lines = f.readlines()
-                    if len(lines) > 1:  # Skip header line
-                        return "Available (check /proc/fb)"
-            except:
-                pass
-
-        elif platform.system() == "Darwin":
-            try:
-                return (
-                    subprocess.check_output(
-                        "system_profiler SPDisplaysDataType | grep Resolution",
-                        shell=True,
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    .strip()
-                    .split(":")[-1]
-                    .strip()
-                )
-            except:
-                pass
-        elif platform.system() == "Windows":
-            try:
-                user32 = ctypes.windll.user32
-                width = user32.GetSystemMetrics(0)
-                height = user32.GetSystemMetrics(1)
-                return f"{width}x{height}"
-            except:
-                pass
-
-        return "Unknown"
-    except:
-        return "Unknown"
-
-
-def get_desktop_env():
-    try:
-        if platform.system() == "Darwin":
-            return "Aqua (Quartz Compositor)"
-        elif platform.system() == "Windows":
-            return "Windows Shell"
-
-        env = (
-            os.environ.get("XDG_CURRENT_DESKTOP")
-            or os.environ.get("DESKTOP_SESSION")
-            or "Unknown"
-        )
-        env = env.strip()
-
-        if "KDE" in env or "Plasma" in env:
-            try:
-                version = subprocess.check_output(
-                    "plasmashell --version",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                return f"KDE Plasma {version.split()[-1]}"
-            except:
-                return "KDE Plasma"
-        elif "GNOME" in env:
-            try:
-                version = subprocess.check_output(
-                    "gnome-shell --version",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                return version
-            except:
-                return "GNOME"
-        elif "xfce" in env.lower():
-            return "XFCE"
-        elif "cinnamon" in env.lower():
-            return "Cinnamon"
-        elif "mate" in env.lower():
-            return "MATE"
-        elif "lxqt" in env.lower():
-            return "LXQt"
-        elif "budgie" in env.lower():
-            return "Budgie"
-        else:
-            return env
-    except:
-        return "Unknown"
-
-
-def get_window_manager():
-    try:
-        if platform.system() == "Darwin":
-            return "Quartz WM"
-        elif platform.system() == "Windows":
-            return "DWM (Desktop Window Manager)"
-
-        session_type = os.environ.get("XDG_SESSION_TYPE", "").strip()
-        if session_type.lower() == "wayland":
-            desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").strip()
-            if "hyprland" in desktop.lower():
-                try:
-                    version = (
-                        subprocess.check_output(
-                            "hyprctl version",
-                            shell=True,
-                            text=True,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        .strip()
-                        .split()[1]
-                    )
-                    return f"Hyprland {version}"
-                except:
-                    return "Hyprland"
-            elif "KDE" in desktop:
-                return "KWin (Wayland)"
-            elif "GNOME" in desktop:
-                return "Mutter (Wayland)"
-            else:
-                return f"Wayland ({desktop})"
-
-        try:
-            wm_name = subprocess.check_output(
-                "wmctrl -m", shell=True, text=True, stderr=subprocess.DEVNULL
-            )
-            for line in wm_name.splitlines():
-                if line.startswith("Name:"):
-                    wm = line.split(":", 1)[1].strip()
-                    # Try to get version for some WMs
-                    if "hyprland" in wm.lower():
+    """Detect the screen resolution."""
+    def _do():
+        if S == "Linux":
+            st = _env("XDG_SESSION_TYPE", "").lower()
+            if st == "wayland":
+                if _has("hyprctl"):
+                    out = _cmd("hyprctl monitors -j")
+                    if out:
                         try:
-                            version = (
-                                subprocess.check_output(
-                                    "hyprctl version",
-                                    shell=True,
-                                    text=True,
-                                    stderr=subprocess.DEVNULL,
-                                )
-                                .strip()
-                                .split()[1]
-                            )
-                            return f"{wm} {version}"
-                        except:
+                            monitors = json.loads(out)
+                            if monitors:
+                                m = monitors[0]
+                                return f"{m['width']}x{m['height']} @ {m.get('refreshRate', '?')} Hz"
+                        except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                             pass
-                    return wm
-        except:
-            try:
-                xprop = subprocess.check_output(
-                    "xprop -root _NET_WM_NAME",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                )
-                return xprop.strip().split("=")[-1].replace('"', "").strip()
-            except:
-                pass
+                if _has("swaymsg"):
+                    out = _cmd("swaymsg -t get_outputs")
+                    if out:
+                        try:
+                            for o in json.loads(out):
+                                if o.get("active"):
+                                    m = o.get("current_mode", {})
+                                    w, h = m.get("width"), m.get("height")
+                                    if w and h:
+                                        ref = m.get("refresh", 0)
+                                        hz = round(ref / 1000) if ref > 1000 else ref
+                                        return f"{w}x{h} @ {hz} Hz" if hz else f"{w}x{h}"
+                        except (json.JSONDecodeError, KeyError, TypeError):
+                            pass
+                if _has("wlr-randr"):
+                    out = _cmd("wlr-randr")
+                    if out:
+                        for l in out.splitlines():
+                            l = l.strip()
+                            if "current" in l.lower() and "x" in l:
+                                return l.split()[0]
+            if _has("xrandr"):
+                out = _cmd("xrandr | grep '*' | awk '{print $1}'")
+                if out:
+                    return out.split("\n")[0]
+            for fb in glob.glob("/sys/class/graphics/fb*/modes"):
+                m = _fread(fb)
+                if m:
+                    match = re.search(r'(\d+)x(\d+)', m)
+                    if match:
+                        return f"{match.group(1)}x{match.group(2)}"
+        elif S == "Darwin":
+            out = _cmd("system_profiler SPDisplaysDataType | grep Resolution")
+            if out: return out.split(":")[-1].strip()
+        elif S == "Windows":
+            import ctypes
+            u = ctypes.windll.user32
+            return f"{u.GetSystemMetrics(0)}x{u.GetSystemMetrics(1)}"
+    return _try(_do)
 
-        return "Unknown"
-    except:
-        return "Unknown"
+@cached("de", ttl=3600)
+def get_desktop_env():
+    """Detect the desktop environment."""
+    def _do():
+        if S == "Darwin":
+            return "Aqua"
+        if S == "Windows":
+            return "Windows Shell"
+        env = (_env("XDG_CURRENT_DESKTOP") or _env("DESKTOP_SESSION") or "").strip()
+        if not env:
+            return None
+        el = env.lower()
+        if "kde" in el or "plasma" in el:
+            out = _cmd("plasmashell --version")
+            return f"KDE Plasma {out.split()[-1]}" if out else "KDE Plasma"
+        if "gnome" in el:
+            return _cmd("gnome-shell --version") or "GNOME"
+        for name in ["xfce", "cinnamon", "mate", "lxqt", "budgie", "deepin", "lxde", "hyprland", "sway"]:
+            if name in el:
+                return name.upper() if len(name) <= 4 else name.capitalize()
+        return env
+    return _try(_do)
 
+@cached("wm", ttl=3600)
+def get_window_manager():
+    """Detect the window manager."""
+    def _do():
+        if S == "Darwin":
+            return "Quartz WM"
+        if S == "Windows":
+            return "DWM"
+        st = _env("XDG_SESSION_TYPE", "").lower()
+        if st == "wayland":
+            desk = _env("XDG_CURRENT_DESKTOP", "").lower()
+            if "hyprland" in desk:
+                out = _cmd("hyprctl version -j")
+                if out:
+                    try:
+                        return f"Hyprland {json.loads(out).get('tag', '')}".strip()
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                return "Hyprland"
+            if "sway" in desk:
+                return "Sway"
+            if "kde" in desk:
+                return "KWin (Wayland)"
+            if "gnome" in desk:
+                return "Mutter (Wayland)"
+            d = _env('XDG_CURRENT_DESKTOP', '')
+            return f"Wayland ({d})" if d else "Wayland"
+        if _has("wmctrl"):
+            out = _cmd("wmctrl -m")
+            if out:
+                for l in out.splitlines():
+                    if l.startswith("Name:"):
+                        return l.split(":", 1)[1].strip()
+        if _has("xprop"):
+            out = _cmd("xprop -root _NET_WM_NAME")
+            if out and "=" in out:
+                return out.split("=")[-1].replace('"', '').strip()
+    return _try(_do)
 
-def get_terminal():
+_SHELLS = frozenset({"python", "python3", "bash", "sh", "zsh", "fish", "dash", "node",
+                     "login", "sudo", "su", "sshd", "init", "systemd", "csh", "tcsh",
+                     "ksh", "nu", "elvish", "ion", "xonsh", "pwsh", "powershell"})
+
+_WRAPPER_PROCS = frozenset({"env", "timeout", "stdbuf", "script", "sh", "bash", "zsh"})
+
+# Map binary names to friendlier display names
+_TERMINAL_NAMES = {
+    "alacritty": "Alacritty",
+    "kitty": "Kitty",
+    "wezterm-gui": "WezTerm",
+    "wezterm": "WezTerm",
+    "gnome-terminal-server": "GNOME Terminal",
+    "gnome-terminal": "GNOME Terminal",
+    "konsole": "Konsole",
+    "xfce4-terminal": "Xfce Terminal",
+    "mate-terminal": "MATE Terminal",
+    "tilix": "Tilix",
+    "terminator": "Terminator",
+    "foot": "Foot",
+    "footclient": "Foot",
+    "st": "st",
+    "urxvt": "URxvt",
+    "rxvt": "rxvt",
+    "xterm": "xterm",
+    "lxterminal": "LXTerminal",
+    "sakura": "Sakura",
+    "tmux": "tmux",
+    "screen": "screen",
+    "vscode": "VS Code",
+    "code": "VS Code",
+}
+
+def get_terminal() -> str:
+    """Detect the terminal emulator by walking the process tree."""
+    for v in ("TERM_PROGRAM", "TERMINAL_EMULATOR"):
+        t = _env(v)
+        if t:
+            return _TERMINAL_NAMES.get(t.lower().replace(" ", "-"), t)
+    if S == "Windows":
+        if _env("WT_SESSION"):
+            return "Windows Terminal"
+        if _env("ConEmuPID"):
+            return "ConEmu"
+
+    def _is_shell_or_wrapper(name: str) -> bool:
+        n = name.lower()
+        if n in _SHELLS or n in _WRAPPER_PROCS:
+            return True
+        # Skip versioned interpreter names like python3.12.
+        return n.startswith("python")
+
     try:
-        parent = os.readlink(f"/proc/{os.getppid()}/exe")
-        terminal = os.path.basename(parent)
-        # Try to get version for some terminals
-        if terminal == "cursor":
-            return "cursor"
-        elif terminal == "konsole":
+        pid = os.getppid()
+        visited = set()
+        while pid > 1 and pid not in visited:
+            visited.add(pid)
             try:
-                version = (
-                    subprocess.check_output(
-                        "konsole --version",
-                        shell=True,
-                        text=True,
-                        stderr=subprocess.DEVNULL,
-                    )
-                    .strip()
-                    .split()[-1]
-                )
-                return f"{terminal} {version}"
-            except:
-                pass
-        return terminal
-    except:
-        return os.getenv("TERM", "Unknown")
+                proc = psutil.Process(pid)
+                name = (proc.name() or "").strip()
+            except (OSError, PermissionError):
+                break
+            if name and not _is_shell_or_wrapper(name):
+                key = name.lower().replace(" ", "-")
+                return _TERMINAL_NAMES.get(key, name)
+            try:
+                parent = proc.parent()
+                pid = parent.pid if parent else 0
+            except (psutil.Error, OSError, ValueError):
+                break
+    except Exception:
+        pass
+    return _env("TERM", "Unknown")
 
-
+@cached("cpu", ttl=600)
 def get_cpu():
-    try:
-        if platform.system() == "Linux":
+    """Detect CPU model, core count, and frequency."""
+    def _do():
+        name = "Unknown CPU"
+        if S == "Linux":
             try:
-                with open("/proc/cpuinfo", "r") as f:
-                    for line in f:
-                        if line.startswith("model name"):
-                            cpu_name = line.split(":")[1].strip()
-                            # Clean up CPU name
-                            if "Intel(R) Core(TM)" in cpu_name:
-                                # Extract just the model (e.g., "i3-1005G1")
-                                parts = cpu_name.split()
-                                for part in parts:
-                                    if part.startswith("i") and "-" in part:
-                                        cpu_name = f"Intel {part}"
-                                        break
-                            elif "AMD" in cpu_name:
-                                # Extract AMD model
-                                if "Ryzen" in cpu_name:
-                                    parts = cpu_name.split()
-                                    for part in parts:
-                                        if part.startswith("Ryzen"):
-                                            cpu_name = f"AMD {part}"
-                                            break
+                with open("/proc/cpuinfo", encoding="utf-8") as f:
+                    for l in f:
+                        if l.startswith("model name"):
+                            name = l.split(":", 1)[1].strip()
                             break
-                    else:
-                        cpu_name = "Unknown CPU"
-            except:
-                cpu_name = "Unknown CPU"
+            except OSError:
+                pass
+            if name == "Unknown CPU":
+                out = _cmd("lscpu 2>/dev/null | grep -i 'model name'")
+                if out:
+                    name = out.split(":", 1)[1].strip() if ":" in out else out.strip()
+        elif S == "Darwin":
+            name = _cmd("sysctl -n machdep.cpu.brand_string") or platform.processor() or name
+        elif S == "Windows":
+            out = _cmd("wmic cpu get name")
+            if out:
+                lines = [l.strip() for l in out.split("\n")[1:] if l.strip()]
+                if lines: name = lines[0]
+            if name == "Unknown CPU":
+                name = platform.processor() or name
         else:
-            cpu_name = platform.processor() or "Unknown CPU"
-
+            name = platform.processor() or name
         freq = psutil.cpu_freq()
-        cores = psutil.cpu_count()
-        if freq:
-            # Convert to GHz if needed
-            freq_ghz = freq.current / 1000 if freq.current > 1000 else freq.current
-            return f"{cpu_name} ({cores}) @ {freq_ghz:.2f} GHz"
+        cores = psutil.cpu_count(logical=False)
+        threads = psutil.cpu_count()
+        if cores and threads:
+            core_info = f"{cores}C/{threads}T" if cores != threads else str(threads)
         else:
-            return f"{cpu_name} ({cores})"
-    except:
-        return "Unknown"
+            core_info = str(threads or cores or "?")
+        if freq and freq.current:
+            ghz = freq.current / 1000
+            return f"{name} ({core_info}) @ {ghz:.2f} GHz"
+        return f"{name} ({core_info})"
+    return _try(_do)
 
-
+@cached("gpu", ttl=3600)
 def get_gpu():
-    try:
-        if platform.system() == "Windows":
-            output = subprocess.getoutput("wmic path win32_VideoController get name")
-            lines = output.strip().split("\n")[1:]  # Skip header
-            gpus = [line.strip() for line in lines if line.strip()]
-            return gpus[0] if gpus else "Unknown"
-        elif platform.system() == "Linux":
-            output = subprocess.getoutput("lspci | grep -i vga")
-            if output:
-                # Extract GPU name from lspci output
-                lines = output.strip().split("\n")
-                gpu_info = lines[0].split(":")[-1].strip()
-
-                # Clean up GPU name
-                if "Intel Corporation" in gpu_info:
-                    if "Iris Plus Graphics" in gpu_info:
-                        gpu_info = "Intel Iris Plus Graphics G1"
-                    elif "UHD Graphics" in gpu_info:
-                        gpu_info = "Intel UHD Graphics"
-                    elif "HD Graphics" in gpu_info:
-                        gpu_info = "Intel HD Graphics"
-                elif "NVIDIA" in gpu_info:
-                    # Extract NVIDIA model
-                    if "GeForce" in gpu_info:
-                        parts = gpu_info.split()
-                        for i, part in enumerate(parts):
-                            if part == "GeForce" and i + 1 < len(parts):
-                                gpu_info = f"NVIDIA GeForce {parts[i+1]}"
-                                break
-                elif "AMD" in gpu_info:
-                    # Extract AMD model
-                    if "Radeon" in gpu_info:
-                        parts = gpu_info.split()
-                        for i, part in enumerate(parts):
-                            if part == "Radeon" and i + 1 < len(parts):
-                                gpu_info = f"AMD Radeon {parts[i+1]}"
-                                break
-
-                # Try to get frequency
-                try:
-                    freq_output = subprocess.getoutput(
-                        "cat /sys/class/drm/card*/gt_cur_freq_mhz 2>/dev/null | head -1"
-                    )
-                    if freq_output and freq_output.strip().isdigit():
-                        freq = float(freq_output.strip()) / 1000
-                        gpu_info += f" @ {freq:.2f} GHz"
-                except:
-                    pass
-
-                # Truncate if too long
-                if len(gpu_info) > 50:
-                    gpu_info = gpu_info[:47] + "..."
-                return gpu_info
-            else:
-                return "Unknown"
-        elif platform.system() == "Darwin":
-            output = subprocess.getoutput(
-                "system_profiler SPDisplaysDataType | grep Chipset"
-            )
-            if output:
-                chipset = output.strip().split(":")[-1].strip()
-                if len(chipset) > 50:
-                    chipset = chipset[:47] + "..."
-                return chipset
-            else:
-                return "Unknown"
-        return "Unknown"
-    except:
-        return "Unknown"
-
+    """Detect the primary GPU."""
+    def _do():
+        if S == "Windows":
+            out = _cmd("wmic path win32_VideoController get name", timeout=10)
+            if out:
+                lines = [l.strip() for l in out.split("\n")[1:] if l.strip()]
+                if lines:
+                    return lines[0]
+        elif S == "Linux":
+            out = _cmd("lspci 2>/dev/null | grep -iE 'vga|3d|display'", timeout=10)
+            if out:
+                line = out.split("\n")[0]
+                info = line.split(": ", 1)[1].strip() if ": " in line else line.strip()
+                info = re.sub(r'\s*\(rev [0-9a-fA-F]+\)\s*$', '', info)
+                # Clean up common vendor prefixes for brevity
+                info = re.sub(r'^(Advanced Micro Devices,? Inc\.?\s*\[AMD(/ATI)?\]\s*)', 'AMD ', info)
+                info = re.sub(r'^(NVIDIA Corporation\s*)', 'NVIDIA ', info)
+                info = re.sub(r'^(Intel Corporation\s*)', 'Intel ', info)
+                return truncate(info, 60)
+        elif S == "Darwin":
+            out = _cmd("system_profiler SPDisplaysDataType | grep -E 'Chipset|Chip'", timeout=10)
+            if out:
+                return out.split(":")[-1].strip()
+    return _try(_do)
 
 def get_memory():
+    """Return used/total RAM with percentage."""
     try:
-        mem = psutil.virtual_memory()
-        used = int(mem.used / 1024 / 1024 / 1024 * 100) / 100
-        total = int(mem.total / 1024 / 1024 / 1024 * 100) / 100
-        percent = int(mem.percent)
-        return f"{used} GiB / {total} GiB ({percent}%)"
-    except:
+        m = psutil.virtual_memory()
+        return f"{_gib(m.used)} GiB / {_gib(m.total)} GiB ({round(m.percent)}%)"
+    except Exception:
         return "Unknown"
-
 
 def get_swap():
+    """Return used/total swap with percentage."""
     try:
-        swap = psutil.swap_memory()
-        if swap.total > 0:
-            used = int(swap.used / 1024 / 1024 / 1024 * 100) / 100
-            total = int(swap.total / 1024 / 1024 / 1024 * 100) / 100
-            percent = int((swap.used / swap.total) * 100)
-            return f"{used} GiB / {total} GiB ({percent}%)"
-        else:
+        s = psutil.swap_memory()
+        if s.total == 0:
             return "N/A"
-    except:
+        pct = round(s.percent) if hasattr(s, 'percent') else int(s.used / s.total * 100)
+        return f"{_gib(s.used)} GiB / {_gib(s.total)} GiB ({pct}%)"
+    except Exception:
         return "Unknown"
-
 
 def get_disk():
+    """Return used/total disk space with filesystem type on Linux."""
     try:
-        disk = psutil.disk_usage("/")
-        used = int(disk.used / 1024 / 1024 / 1024 * 100) / 100
-        total = int(disk.total / 1024 / 1024 / 1024 * 100) / 100
-        percent = int((disk.used / disk.total) * 100)
-
-        # Try to get filesystem type
-        try:
-            fs_type = subprocess.check_output(
-                "df -T / | tail -1 | awk '{print $2}'",
-                shell=True,
-                text=True,
-                stderr=subprocess.DEVNULL,
-            ).strip()
-            return f"{used} GiB / {total} GiB ({percent}%) - {fs_type}"
-        except:
-            return f"{used} GiB / {total} GiB ({percent}%)"
-    except:
+        d = psutil.disk_usage("/")
+        base = f"{_gib(d.used)} GiB / {_gib(d.total)} GiB ({round(d.percent)}%)"
+        if S == "Linux":
+            fs = _cmd("df -T / | tail -1 | awk '{print $2}'")
+            if fs:
+                return f"{base} - {fs}"
+        return base
+    except Exception:
         return "Unknown"
 
-
-def get_ip():
+def get_ip() -> str:
+    """Return the local IP address with interface name on Linux."""
+    sock = None
     try:
-        # Get local IP address
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(("8.8.8.8", 80))
-        ip = s.getsockname()[0]
-        s.close()
-
-        # Try to get interface name
-        try:
-            if platform.system() == "Linux":
-                output = subprocess.check_output(
-                    "ip route get 8.8.8.8 | awk '{print $5}'",
-                    shell=True,
-                    text=True,
-                    stderr=subprocess.DEVNULL,
-                ).strip()
-                if output:
-                    return f"{ip}/24 ({output})"
-        except:
-            pass
-
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(2)
+        sock.connect(("8.8.8.8", 80))
+        ip = sock.getsockname()[0]
+        if S == "Linux":
+            out = _cmd(f"ip -o addr show | grep -wF '{ip}'")
+            if out:
+                parts = out.splitlines()[0].split()
+                iface = parts[1] if len(parts) > 1 else None
+                cidr = parts[3] if len(parts) > 3 else ip
+                return f"{cidr} ({iface})" if iface else cidr
         return ip
-    except:
+    except Exception:
         return "Unavailable"
-
+    finally:
+        if sock:
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 def get_battery():
-    try:
-        if platform.system() == "Linux":
-            try:
-                # Check if battery exists
-                battery_path = "/sys/class/power_supply/BAT0"
-                if not os.path.exists(battery_path):
-                    return "N/A"
-
-                # Get battery info
-                with open(f"{battery_path}/capacity", "r") as f:
-                    capacity = f.read().strip()
-
-                with open(f"{battery_path}/status", "r") as f:
-                    status = f.read().strip()
-
-                # Get battery name
-                try:
-                    with open(f"{battery_path}/model_name", "r") as f:
-                        name = f.read().strip()
-                except:
-                    name = "Battery"
-
-                status_text = "Connected" if status == "Charging" else "Disconnected"
-                return f"{capacity}% [{status_text}]"
-            except:
+    """Detect battery charge level and charging status."""
+    def _do():
+        if S == "Linux":
+            bp = next(iter(sorted(Path("/sys/class/power_supply").glob("BAT*"))), None)
+            if not bp:
                 return "N/A"
-        elif platform.system() == "Darwin":
-            try:
-                output = subprocess.check_output(
-                    "pmset -g batt", shell=True, text=True, stderr=subprocess.DEVNULL
-                )
-                lines = output.strip().split("\n")
-                if len(lines) > 1:
-                    battery_line = lines[1]
-                    parts = battery_line.split("\t")
-                    if len(parts) > 1:
-                        status = parts[1].strip()
-                        return status
-            except:
-                pass
-        return "N/A"
-    except:
-        return "Unknown"
-
+            cap = (bp / "capacity").read_text(encoding="utf-8").strip()
+            st = (bp / "status").read_text(encoding="utf-8").strip().lower()
+            label = "Charging" if st == "charging" else "Full" if st == "full" else "Discharging"
+            return f"{cap}% [{label}]"
+        b = psutil.sensors_battery()
+        if not b:
+            return "N/A"
+        if b.power_plugged:
+            label = "Full" if b.percent >= 100 else "Charging"
+        else:
+            label = "Discharging"
+        return f"{round(b.percent)}% [{label}]"
+    return _try(_do, "N/A")
 
 def get_locale():
+    """Return the system locale."""
     try:
-        return locale.getlocale()[0] or "Unknown"
-    except:
+        return locale.getlocale()[0] or _env("LANG", "Unknown").split(".")[0]
+    except Exception:
         return "Unknown"
 
-
-def get_dns_gateway():
-    try:
-        dns = "Unknown"
-        gateway = "Unknown"
-        if platform.system() == "Linux" or platform.system() == "Darwin":
-            with open("/etc/resolv.conf") as f:
-                dns_lines = [
-                    line.strip().split()[1]
-                    for line in f
-                    if line.startswith("nameserver")
-                ]
-            dns = ", ".join(dns_lines) if dns_lines else "None"
-            route = subprocess.getoutput("ip route show default").split()
-            gateway = route[2] if "default" in route else "Unknown"
-        elif platform.system() == "Windows":
-            output = subprocess.getoutput("ipconfig /all")
-            for line in output.splitlines():
-                if "Default Gateway" in line:
-                    gateway = line.split(":")[-1].strip()
-                if "DNS Servers" in line:
-                    dns = line.split(":")[-1].strip()
-        return f"GW: {gateway} | DNS: {dns}"
-    except:
-        return "Unknown"
+def get_color_blocks():
+    """Generate terminal color palette blocks (neofetch-style)."""
+    normal = ''.join(f'\033[4{i}m   ' for i in range(8)) + '\033[0m'
+    bright = ''.join(f'\033[10{i}m   ' for i in range(8)) + '\033[0m'
+    return [normal, bright]

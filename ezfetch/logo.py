@@ -1,9 +1,9 @@
+"""ASCII logo art and distro detection."""
+
 import platform
-from typing import Optional
 from pathlib import Path
+from typing import List, Optional
 
-
-# Logo definitions
 LOGOS = {
     "arch": r"""                     
                   -`                     
@@ -265,86 +265,67 @@ yMMNNNNNNNmmmmmNNMmhs+/-`
                                             c      
                                             .'     
                                              .""",
+
+    "linux": r"""
+        .--.
+       |o_o |
+       |:_/ |
+      //   \ \
+     (|     | )
+    /'\_   _/`\
+    \___)=(___/""",
 }
 
-# Add aliases
-LOGOS["debian"] = LOGOS.get("debian", LOGOS["arch"])
-LOGOS["ubuntu"] = LOGOS.get("ubuntu", LOGOS["arch"])
-LOGOS["mint"] = LOGOS.get("mint", LOGOS["arch"])
-LOGOS["redhat"] = LOGOS.get("redhat", LOGOS["arch"])
-LOGOS["mac"] = LOGOS.get("mac", LOGOS["arch"])
-LOGOS["windows"] = LOGOS.get("windows", LOGOS["arch"])
-LOGOS["macos"] = LOGOS["mac"]
-LOGOS["darwin"] = LOGOS["mac"]
+LOGOS["macos"] = LOGOS["darwin"] = LOGOS["mac"]
 LOGOS["pop"] = LOGOS["popos"]
-
+LOGOS["tux"] = LOGOS["linux"]
+LOGOS["rhel"] = LOGOS["centos"] = LOGOS["rocky"] = LOGOS["alma"] = LOGOS["redhat"]
 
 def detect_distro() -> str:
-    """
-    Detect the current Linux distribution
-    
-    Returns:
-        Distribution name in lowercase
-    """
-    os_name = platform.system().lower()
-    
-    if os_name == "linux":
-        try:
-            with open("/etc/os-release") as f:
-                os_release = f.read().lower()
-                
-                # Check for specific distributions
-                distros = [
-                    "arch", "ubuntu", "debian", "mint", "fedora",
-                    "manjaro", "popos", "pop", "alpine", "gentoo",
-                    "kali", "red hat", "redhat"
-                ]
-                
-                for distro in distros:
-                    if distro in os_release:
-                        return distro.replace(" ", "")
-        except FileNotFoundError:
-            pass
-        
-        return "arch"  # Default for Linux
-    
-    elif os_name == "darwin":
+    """Detect the current OS/distro and return the matching logo key."""
+    s = platform.system().lower()
+    if s == "darwin":
         return "mac"
-    elif os_name == "windows":
+    if s == "windows":
         return "windows"
-    
-    return "arch"
-
-
-def get_logo(logo_name: Optional[str] = None, custom_logo_path: Optional[str] = None) -> str:
-    """
-    Get ASCII art logo for current OS or specified logo
-    
-    Args:
-        logo_name: Name of logo to use (overrides detection)
-        custom_logo_path: Path to custom logo file
-    
-    Returns:
-        ASCII art logo as string
-    """
-    # Use custom logo if provided
-    if custom_logo_path:
+    if s == "linux":
         try:
-            with open(custom_logo_path, "r") as f:
-                return f.read()
-        except (IOError, FileNotFoundError):
+            data = {}
+            for line in Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    data[k.strip().lower()] = v.strip().strip('"').lower()
+            lookup = {
+                "arch": "arch", "ubuntu": "ubuntu", "debian": "debian",
+                "linuxmint": "mint", "fedora": "fedora", "manjaro": "manjaro",
+                "pop": "popos", "alpine": "alpine", "gentoo": "gentoo",
+                "kali": "kali", "rhel": "redhat", "centos": "redhat",
+                "rocky": "redhat", "alma": "redhat",
+                "opensuse": "fedora", "suse": "fedora",
+                "void": "linux", "nixos": "linux", "endeavouros": "arch",
+                "artix": "arch", "garuda": "arch",
+            }
+            # Check ID first, then fall back to ID_LIKE for derivative distros
+            for id_field in ("id", "id_like"):
+                distro_id = data.get(id_field, "")
+                for key, logo in lookup.items():
+                    if key in distro_id:
+                        return logo
+        except Exception:
             pass
-    
-    # Use specified logo or detect
-    distro = logo_name or detect_distro()
-    return LOGOS.get(distro.lower(), LOGOS["arch"])
+        return "linux"
+    return "linux"
+
+def get_logo(name: Optional[str] = None, custom_path: Optional[str] = None) -> str:
+    """Return ASCII logo art for the given distro name, or auto-detect."""
+    if custom_path:
+        try:
+            return Path(custom_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            pass
+    return LOGOS.get((name or detect_distro()).lower(), LOGOS["linux"])
 
 
-def list_logos() -> list:
-    """
-    Get list of available logo names
-    
-    Returns:
-        List of logo names
-    """
+def list_logos() -> List[str]:
+    """Return sorted list of available logo names."""
     return sorted(set(LOGOS.keys()))

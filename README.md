@@ -1,8 +1,8 @@
 # ezfetch
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](https://github.com/wtfenzo/ezfetch)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](https://github.com/wtfenzo/ezfetch)
 
 > A blazing-fast, highly customizable, cross-platform system information tool written in Python.
 
@@ -12,13 +12,18 @@ Inspired by neofetch but with modern features, extensive customization, better p
 
 ## ✨ Features
 
+**See also:**
+- [Troubleshooting Guide](docs/troubleshooting.md)
+- [Configuration Guide](docs/configuration.md)
+
+
 - **⚡ Fast & Lightweight** — Pure Python with minimal dependencies (only psutil)
 - **🌍 Cross-platform** — Linux (X11/Wayland), macOS, Windows, and Termux
 - **🎨 Beautiful Output** — ASCII art logos with customizable color themes
 - **📊 Comprehensive Info** — OS, CPU, GPU, RAM, resolution, shell, uptime, DE/WM, and more
 - **🎭 Multiple Themes** — 6 built-in themes (default, nord, dracula, gruvbox, monokai, solarized)
 - **🐧 16+ Logos** — Arch, Ubuntu, Debian, Fedora, Manjaro, Pop!_OS, Alpine, Gentoo, Kali, and more
-- **⚙️ Highly Configurable** — JSON config file with extensive options
+- **⚙️ Highly Configurable** — JSON config file with extensive options ([see Configuration Guide](docs/configuration.md))
 - **🎯 Smart Detection** — Auto-identifies desktop environments and window managers
 - **📦 Smart Caching** — Cache expensive operations (3x faster on cached runs)
 - **🔧 Rich CLI** — 11+ command-line options for quick customization
@@ -27,6 +32,8 @@ Inspired by neofetch but with modern features, extensive customization, better p
 ---
 
 ## 📥 Installation
+
+**Having issues?** See the [Troubleshooting Guide](docs/troubleshooting.md).
 
 ### Quick Start (Recommended - Works Instantly!)
 
@@ -61,20 +68,21 @@ pip install --user --break-system-packages -e .
 ```bash
 git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
-# Install pip if needed
-sudo apt install python3-pip
-# Install ezfetch
-pip3 install --user -e .
-ezfetch
+# Recommended: virtual environment (works with PEP 668)
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python3 -m ezfetch
 ```
 
 #### On macOS:
 ```bash
 git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
 cd ezfetch
-# pip3 is usually pre-installed
-pip3 install --user -e .
-ezfetch
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+python3 -m ezfetch
 ```
 
 #### Generic (Works Everywhere):
@@ -85,18 +93,24 @@ cd ezfetch
 python3 -m ezfetch
 ```
 
+#### Windows (PowerShell):
+```powershell
+git clone --depth 1 https://github.com/wtfenzo/ezfetch.git
+cd ezfetch
+./scripts/install.ps1
+```
+
 ---
 
 ## 🚀 Usage
+
+**Configuration tips and more examples:** See [Configuration Guide](docs/configuration.md).
 
 ### Basic Usage
 
 ```bash
 # If installed system-wide
 ezfetch
-
-# If running without installation
-python3 -m ezfetch
 ```
 
 ### Command-Line Options
@@ -140,9 +154,9 @@ ezfetch --config /path/to/config.json
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Configuration ([Full Guide](docs/configuration.md))
 
-ezfetch creates a config file at `~/.config/ezfetch/config.json` which you can customize.
+ezfetch creates a config file at `~/.config/ezfetch/config.json` which you can customize. For advanced configuration, see [docs/configuration.md](docs/configuration.md).
 
 ### Example Configuration
 
@@ -152,12 +166,10 @@ ezfetch creates a config file at `~/.config/ezfetch/config.json` which you can c
     "show_logo": true,
     "show_colors": true,
     "truncate_length": 50,
-    "logo_padding": 30
+    "show_color_blocks": true
   },
   "theme": {
-    "label_color": "bright_green",
-    "value_color": "bright_cyan",
-    "logo_color": "cyan"
+    "name": "default"
   },
   "fields": {
     "enabled": [
@@ -271,13 +283,13 @@ ezfetch intelligently caches slow operations (like package counting) in `~/.cach
 You can use RGB/hex colors in themes:
 
 ```python
-from ezfetch.colors import Colors
+from ezfetch.colors import rgb, from_hex
 
 # Use RGB
-custom_color = Colors.rgb(255, 87, 51)
+custom_color = rgb(255, 87, 51)
 
 # Use hex
-custom_color = Colors.from_hex("#FF5733")
+custom_color = from_hex("#FF5733")
 ```
 
 ### JSON Output
@@ -290,26 +302,6 @@ ezfetch --json | jq '.CPU'
 
 ---
 
-## 📋 Usage Examples
-
-### Add to Shell Startup
-
-Add to `~/.bashrc` or `~/.zshrc`:
-```bash
-# If installed
-ezfetch
-
-# If running from directory
-cd ~/ezfetch && python3 -m ezfetch
-```
-
-### System Monitoring Script
-
-```bash
-#!/bin/bash
-python3 -m ezfetch --json | jq '{CPU: .CPU, Memory: .Memory, Disk: .Disk}'
-```
-
 ### Custom Configuration
 
 Create `~/.config/ezfetch/config.json`:
@@ -319,8 +311,7 @@ Create `~/.config/ezfetch/config.json`:
     "enabled": ["User", "OS", "Shell", "CPU", "Memory"]
   },
   "theme": {
-    "label_color": "bright_magenta",
-    "value_color": "bright_yellow"
+    "name": "dracula"
   }
 }
 ```
@@ -343,7 +334,10 @@ python3 -m ezfetch --json > system-info.json
 
 ---
 
-## 🔧 Troubleshooting
+## 🔧 Troubleshooting ([Full Guide](docs/troubleshooting.md))
+
+
+For more troubleshooting tips and platform-specific help, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ### "externally-managed-environment" error (Arch Linux)
 
@@ -385,11 +379,6 @@ sudo apt install python3-pip
 **Fedora:**
 ```bash
 sudo dnf install python3-pip
-```
-
-**Best alternative:** Run without installation:
-```bash
-python3 -m ezfetch
 ```
 
 ### "python3: command not found"
@@ -461,7 +450,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Repository:** [github.com/wtfenzo/ezfetch](https://github.com/wtfenzo/ezfetch)
 - **Issues:** [Bug Reports & Feature Requests](https://github.com/wtfenzo/ezfetch/issues)
+<<<<<<< HEAD
 - **Version:** 1.1.0
+=======
+- **Version:** 1.3.0
+>>>>>>> 5b477de (feat: mproved distro detection)
 
 ---
 

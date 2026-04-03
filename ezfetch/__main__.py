@@ -1,286 +1,224 @@
-"""
-Main entry point for ezfetch
-"""
+"""CLI entry point and display logic for ezfetch."""
+
 import argparse
 import json
+import signal
 import sys
-from typing import Dict, Any, Optional
+from typing import Dict, List, Optional
 
 from . import __version__
 from .logo import get_logo, list_logos
-from .info import *
-from .colors import Colors, Theme, colorize
+from .info import (
+    get_battery,
+    get_color_blocks,
+    get_cpu,
+    get_desktop_env,
+    get_disk,
+    get_gpu,
+    get_host,
+    get_ip,
+    get_kernel,
+    get_locale,
+    get_memory,
+    get_os,
+    get_packages,
+    get_resolution,
+    get_shell,
+    get_swap,
+    get_terminal,
+    get_uptime,
+    get_user_host,
+    get_window_manager,
+)
+from .colors import Theme, colorize, strip_ansi
 from .config import get_config
-from .utils import truncate
+from .cache import get_cache
+from .utils import truncate, display_width, pad_to_width
+
+# Prevent BrokenPipeError when piped to head/etc. on POSIX systems
+if hasattr(signal, 'SIGPIPE'):
+    signal.signal(signal.SIGPIPE, signal.SIG_DFL)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments"""
-    parser = argparse.ArgumentParser(
-        description="ezfetch - A fast, cross-platform system info tool",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+    """Parse command-line arguments."""
+    p = argparse.ArgumentParser(
+        description="ezfetch - fast, cross-platform system info",
+        epilog="Documentation: https://github.com/wtfenzo/ezfetch",
     )
-    
-    parser.add_argument(
-        "-v", "--version",
-        action="version",
-        version=f"ezfetch {__version__}",
-        help="Show version and exit"
-    )
-    
-    parser.add_argument(
-        "-l", "--logo",
-        type=str,
-        metavar="NAME",
-        help=f"Logo to display (available: {', '.join(list_logos()[:5])}...)"
-    )
-    
-    parser.add_argument(
-        "--list-logos",
-        action="store_true",
-        help="List all available logos"
-    )
-    
-    parser.add_argument(
-        "--no-logo",
-        action="store_true",
-        help="Don't display logo"
-    )
-    
-    parser.add_argument(
-        "--custom-logo",
-        type=str,
-        metavar="PATH",
-        help="Path to custom ASCII logo file"
-    )
-    
-    parser.add_argument(
-        "-t", "--theme",
-        type=str,
-        default="default",
-        help=f"Color theme (available: {', '.join(Theme.list_themes())})"
-    )
-    
-    parser.add_argument(
-        "--list-themes",
-        action="store_true",
-        help="List all available themes"
-    )
-    
-    parser.add_argument(
-        "-c", "--config",
-        type=str,
-        metavar="PATH",
-        help="Path to custom config file"
-    )
-    
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output in JSON format"
-    )
-    
-    parser.add_argument(
-        "--no-color",
-        action="store_true",
-        help="Disable colors in output"
-    )
-    
-    parser.add_argument(
-        "-f", "--field",
-        action="append",
-        metavar="NAME",
-        help="Show specific field(s) only (can be used multiple times)"
-    )
-    
-    return parser.parse_args()
+    p.add_argument("-v", "--version", action="version", version=f"ezfetch {__version__}")
+    p.add_argument("-l", "--logo", type=str, metavar="NAME", help="use a specific distro logo")
+    p.add_argument("--list-logos", action="store_true", help="list available logos and exit")
+    p.add_argument("--no-logo", action="store_true", help="hide the ASCII logo")
+    p.add_argument("--custom-logo", type=str, metavar="PATH", help="path to a custom ASCII art file")
+    p.add_argument("-t", "--theme", type=str, default=None, help="color theme name")
+    p.add_argument("--list-themes", action="store_true", help="list available themes and exit")
+    p.add_argument("-c", "--config", type=str, metavar="PATH", help="path to config JSON file")
+    p.add_argument("--json", action="store_true", help="output system info as JSON")
+    p.add_argument("--no-color", action="store_true", help="disable all colors")
+    p.add_argument("--no-color-blocks", action="store_true", help="hide terminal color palette")
+    p.add_argument("--no-cache", action="store_true", help="bypass disk cache for this run")
+    p.add_argument("--clear-cache", action="store_true", help="clear the disk cache and exit")
+    p.add_argument("-f", "--field", action="append", metavar="NAME",
+                   help="show only specific fields (can be repeated)")
+    return p.parse_args()
 
 
-def get_system_info() -> Dict[str, Any]:
-    """Collect all system information"""
-    return {
-        "User": get_user_host(),
-        "Host": get_host(),
-        "OS": get_os(),
-        "Kernel": get_kernel(),
-        "Uptime": get_uptime(),
-        "Packages": get_packages(),
-        "Shell": get_shell(),
-        "Resolution": get_resolution(),
-        "DE": get_desktop_env(),
-        "WM": get_window_manager(),
-        "Terminal": get_terminal(),
-        "CPU": get_cpu(),
-        "GPU": get_gpu(),
-        "Memory": get_memory(),
-        "Swap": get_swap(),
-        "Disk": get_disk(),
-        "Local IP": get_ip(),
-        "Battery": get_battery(),
-        "Locale": get_locale(),
-    }
+FIELDS = [
+    ("User", get_user_host), ("Host", get_host), ("OS", get_os), ("Kernel", get_kernel),
+    ("Uptime", get_uptime), ("Packages", get_packages), ("Shell", get_shell),
+    ("Resolution", get_resolution), ("DE", get_desktop_env), ("WM", get_window_manager),
+    ("Terminal", get_terminal), ("CPU", get_cpu), ("GPU", get_gpu), ("Memory", get_memory),
+    ("Swap", get_swap), ("Disk", get_disk), ("Local IP", get_ip), ("Battery", get_battery),
+    ("Locale", get_locale),
+]
 
 
-def filter_fields(
-    fields: Dict[str, Any],
-    enabled_fields: Optional[list] = None,
-    hide_unavailable: bool = True,
-    hide_unknown: bool = False
-) -> Dict[str, str]:
-    """Filter and format fields based on configuration"""
-    filtered = {}
-    
-    for label, value in fields.items():
-        # Skip if not in enabled list
-        if enabled_fields and label not in enabled_fields:
+def collect(enabled: Optional[List[str]] = None) -> Dict[str, str]:
+    """Collect system information for all (or selected) fields."""
+    allowed = {e.lower() for e in enabled} if enabled else None
+    result = {}
+    for k, fn in FIELDS:
+        if allowed and k.lower() not in allowed:
             continue
-        
-        # Skip unavailable fields
-        if hide_unavailable and value in ["Unavailable", "N/A"]:
+        try:
+            result[k] = fn()
+        except Exception:
+            result[k] = "Unknown"
+    return result
+
+
+def _build_info_lines(filtered: Dict[str, str], colors: bool, th: Optional[Theme], ml: int) -> List[str]:
+    """Format system info key-value pairs into display lines."""
+    lines = []
+    first = True
+    for k, v in filtered.items():
+        if first and k == "User":
+            if colors and th:
+                lines.append(colorize(v, th.get('label')))
+                lines.append(colorize("-" * display_width(v), th.get('separator')))
+            else:
+                lines.append(v)
+                lines.append("-" * display_width(v))
+            first = False
             continue
-        
-        # Skip unknown fields
-        if hide_unknown and value == "Unknown":
-            continue
-        
-        # Add field
-        filtered[label] = value if value else "Unknown"
-    
-    return filtered
+        first = False
+        if colors and th:
+            label = colorize(k, th.get('label'))
+            ansi_extra = len(label) - len(strip_ansi(label))
+            sep = colorize(':', th.get('separator'))
+            val = colorize(v, th.get('value'))
+            lines.append(f"{label:<{ml + ansi_extra}} {sep} {val}")
+        else:
+            lines.append(f"{k:<{ml}} : {v}")
+    return lines
 
 
-def display_json(info: Dict[str, str]) -> None:
-    """Display system info as JSON"""
-    print(json.dumps(info, indent=2))
-
-
-def display_info(
+def display(
     logo_name: Optional[str] = None,
-    custom_logo_path: Optional[str] = None,
+    custom_logo: Optional[str] = None,
     show_logo: bool = True,
-    theme_name: str = "default",
-    use_colors: bool = True,
-    fields_filter: Optional[list] = None,
-    truncate_length: int = 50,
-    logo_padding: int = 30,
+    theme: str = "default",
+    colors: bool = True,
+    fields: Optional[List[str]] = None,
+    trunc: int = 50,
+    show_color_blocks: bool = True,
 ) -> None:
-    """
-    Display system information with ASCII logo
-    
-    Args:
-        logo_name: Name of logo to display
-        custom_logo_path: Path to custom logo file
-        show_logo: Whether to show logo
-        theme_name: Name of color theme
-        use_colors: Whether to use colors
-        fields_filter: List of field names to display
-        truncate_length: Maximum length for field values
-        logo_padding: Padding between logo and fields
-    """
-    # Get configuration
-    config = get_config()
-    
-    # Initialize theme
-    theme = Theme(theme_name) if use_colors else Theme("default")
-    
-    # Get system info
-    info = get_system_info()
-    
-    # Filter fields
-    enabled_fields = fields_filter or config.get("fields", "enabled")
-    hide_unavailable = config.get("fields", "hide_unavailable", default=True)
-    hide_unknown = config.get("fields", "hide_unknown", default=False)
-    
-    filtered_info = filter_fields(
-        info,
-        enabled_fields=enabled_fields,
-        hide_unavailable=hide_unavailable,
-        hide_unknown=hide_unknown
-    )
-    
-    # Truncate long values
-    for label in filtered_info:
-        if len(filtered_info[label]) > truncate_length:
-            filtered_info[label] = truncate(filtered_info[label], truncate_length)
-    
-    # Prepare logo
-    logo_lines = []
-    if show_logo:
-        logo = get_logo(logo_name, custom_logo_path)
-        logo_lines = logo.splitlines()
-    
-    # Prepare field lines
-    max_label = max(len(label) for label in filtered_info.keys()) if filtered_info else 0
-    field_lines = []
-    
-    for label, value in filtered_info.items():
-        if use_colors:
-            label_colored = colorize(label, theme.get("label"))
-            separator = colorize(":", theme.get("separator"))
-            value_colored = colorize(value, theme.get("value"))
-            field_line = f"{label_colored:<{max_label + 10}} {separator} {value_colored}"
-        else:
-            field_line = f"{label:<{max_label}} : {value}"
-        field_lines.append(field_line)
-    
-    # Display output
-    max_lines = max(len(logo_lines), len(field_lines))
-    
-    for i in range(max_lines):
-        logo_line = logo_lines[i] if i < len(logo_lines) else ""
-        field_line = field_lines[i] if i < len(field_lines) else ""
-        
-        if show_logo:
-            print(f"{logo_line:<{logo_padding}}  {field_line}")
-        else:
-            print(field_line)
+    """Render system info with optional ASCII logo and color theme."""
+    cfg = get_config()
+    th = Theme(theme) if colors else None
+    enabled = fields or cfg.get("fields", "enabled")
+    info = collect(enabled)
+    hide_na = cfg.get("fields", "hide_unavailable", default=True)
+    hide_unk = cfg.get("fields", "hide_unknown", default=False)
+
+    # Filter out unavailable/unknown fields as configured
+    filtered = {}
+    for k, v in info.items():
+        if hide_na and v in ("Unavailable", "N/A"):
+            continue
+        if hide_unk and v == "Unknown":
+            continue
+        filtered[k] = truncate(str(v) if v else "Unknown", trunc)
+
+    if not filtered:
+        print("ezfetch: no info available to display", file=sys.stderr)
+        return
+
+    # Build logo lines
+    raw_logo = get_logo(logo_name, custom_logo).splitlines() if show_logo else []
+    logo_width = max((display_width(l) for l in raw_logo), default=0) + 2 if raw_logo else 0
+    padded_logo = [pad_to_width(l, logo_width) for l in raw_logo] if raw_logo else []
+    if padded_logo and colors and th:
+        lc = th.get('logo')
+        logo_lines = [colorize(l, lc, reset=True) for l in padded_logo] if lc else padded_logo
+    else:
+        logo_lines = padded_logo
+    blank_pad = " " * logo_width
+
+    # Build info lines
+    ml = max((len(k) for k in filtered), default=0)
+    flines = _build_info_lines(filtered, colors, th, ml)
+
+    # Append color blocks
+    show_blocks = show_color_blocks and cfg.get("display", "show_color_blocks", default=True)
+    if colors and show_blocks:
+        flines.append("")
+        flines.extend(get_color_blocks())
+
+    # Render side-by-side
+    total = max(len(logo_lines), len(flines))
+    output = []
+    for i in range(total):
+        ll = logo_lines[i] if i < len(logo_lines) else blank_pad
+        fl = flines[i] if i < len(flines) else ""
+        output.append(f"{ll}{fl}" if show_logo else fl)
+    print("\n".join(output))
 
 
 def main() -> None:
-    """Main entry point"""
-    args = parse_args()
-    
-    # Handle special flags
-    if args.list_logos:
-        print("Available logos:")
-        for logo in list_logos():
-            print(f"  - {logo}")
+    """CLI entry point."""
+    try:
+        a = parse_args()
+        if a.list_logos:
+            print("\n".join(list_logos()))
+            return
+        if a.list_themes:
+            print("\n".join(Theme.list_themes()))
+            return
+        if a.clear_cache:
+            get_cache().clear()
+            print("Cache cleared.")
+            return
+
+        cfg = get_config(a.config)
+
+        # Temporarily disable caching if --no-cache is set
+        if a.no_cache:
+            cfg.data.setdefault("performance", {})["cache_enabled"] = False
+
+        if a.json:
+            print(json.dumps(collect(a.field), indent=2))
+            return
+
+        display(
+            logo_name=a.logo,
+            custom_logo=a.custom_logo,
+            show_logo=not a.no_logo and cfg.get("display", "show_logo", default=True),
+            theme=a.theme if a.theme is not None else cfg.get("theme", "name", default="default"),
+            colors=not a.no_color and cfg.get("display", "show_colors", default=True),
+            fields=a.field,
+            trunc=int(cfg.get("display", "truncate_length", default=50)),
+            show_color_blocks=not a.no_color_blocks,
+        )
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except BrokenPipeError:
+        # Silently exit when piped to head/etc.
         sys.exit(0)
-    
-    if args.list_themes:
-        print("Available themes:")
-        for theme in Theme.list_themes():
-            print(f"  - {theme}")
-        sys.exit(0)
-    
-    # Load config
-    config = get_config(args.config)
-    
-    # Get display settings
-    show_logo = not args.no_logo and config.get("display", "show_logo", default=True)
-    use_colors = not args.no_color and config.get("display", "show_colors", default=True)
-    truncate_length = config.get("display", "truncate_length", default=50)
-    logo_padding = config.get("display", "logo_padding", default=30)
-    
-    # Get system info
-    info = get_system_info()
-    
-    # Handle JSON output
-    if args.json:
-        display_json(info)
-        sys.exit(0)
-    
-    # Display info
-    display_info(
-        logo_name=args.logo,
-        custom_logo_path=args.custom_logo,
-        show_logo=show_logo,
-        theme_name=args.theme,
-        use_colors=use_colors,
-        fields_filter=args.field,
-        truncate_length=truncate_length,
-        logo_padding=logo_padding,
-    )
+    except Exception as e:
+        print(f"ezfetch: error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

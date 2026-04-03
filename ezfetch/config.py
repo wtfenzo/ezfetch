@@ -1,131 +1,69 @@
-"""
-Configuration management for ezfetch
-"""
+"""Configuration management with JSON file support and defaults."""
+
+import copy
 import json
-import os
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Any, Optional
 
-
-DEFAULT_CONFIG = {
-    "display": {
-        "show_logo": True,
-        "show_colors": True,
-        "truncate_length": 50,
-        "logo_padding": 30,
-    },
-    "theme": {
-        "label_color": "bright_green",
-        "value_color": "bright_cyan",
-        "logo_color": "cyan",
-    },
+DEFAULTS = {
+    "display": {"show_logo": True, "show_colors": True, "truncate_length": 50, "show_color_blocks": True},
+    "theme": {"name": "default"},
     "fields": {
-        "enabled": [
-            "User",
-            "Host",
-            "OS",
-            "Kernel",
-            "Uptime",
-            "Packages",
-            "Shell",
-            "Resolution",
-            "DE",
-            "WM",
-            "Terminal",
-            "CPU",
-            "GPU",
-            "Memory",
-            "Swap",
-            "Disk",
-            "Local IP",
-            "Battery",
-            "Locale",
-        ],
-        "hide_unavailable": True,
-        "hide_unknown": False,
+        "enabled": ["User","Host","OS","Kernel","Uptime","Packages","Shell","Resolution",
+                     "DE","WM","Terminal","CPU","GPU","Memory","Swap","Disk","Local IP","Battery","Locale"],
+        "hide_unavailable": True, "hide_unknown": False,
     },
-    "performance": {
-        "cache_enabled": True,
-        "cache_duration": 300,  # 5 minutes
-    },
+    "performance": {"cache_enabled": True, "cache_duration": 300},
 }
+
+def _merge(base: dict, over: dict) -> None:
+    """Recursively merge *over* into *base*, mutating base in-place."""
+    for k, v in over.items():
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            _merge(base[k], v)
+        else:
+            base[k] = v
 
 
 class Config:
-    """Configuration manager for ezfetch"""
+    """Application configuration backed by a JSON file."""
 
-    def __init__(self, config_path: Optional[str] = None):
-        self.config_dir = Path.home() / ".config" / "ezfetch"
-        self.config_file = self.config_dir / "config.json"
-        
-        if config_path:
-            self.config_file = Path(config_path)
-        
-        self.config = self._load_config()
+    def __init__(self, path: Optional[str] = None) -> None:
+        self.file = Path(path) if path else Path.home() / ".config" / "ezfetch" / "config.json"
+        self.data: dict = self._load()
 
-    def _load_config(self) -> Dict[str, Any]:
-        """Load configuration from file or use defaults"""
-        if self.config_file.exists():
+    def _load(self) -> dict:
+        cfg = copy.deepcopy(DEFAULTS)
+        if self.file.exists():
             try:
-                with open(self.config_file, "r") as f:
-                    user_config = json.load(f)
-                # Merge with defaults
-                config = DEFAULT_CONFIG.copy()
-                self._deep_merge(config, user_config)
-                return config
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Warning: Could not load config file: {e}")
-                return DEFAULT_CONFIG.copy()
-        return DEFAULT_CONFIG.copy()
-
-    def _deep_merge(self, base: Dict, override: Dict) -> None:
-        """Deep merge override dict into base dict"""
-        for key, value in override.items():
-            if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-                self._deep_merge(base[key], value)
-            else:
-                base[key] = value
+                _merge(cfg, json.loads(self.file.read_text(encoding="utf-8")))
+            except (json.JSONDecodeError, OSError):
+                pass
+        return cfg
 
     def get(self, *keys: str, default: Any = None) -> Any:
-        """Get configuration value by dot-separated key path"""
-        value = self.config
-        for key in keys:
-            if isinstance(value, dict) and key in value:
-                value = value[key]
+        """Traverse nested config keys, returning *default* if any key is missing."""
+        v = self.data
+        for k in keys:
+            if isinstance(v, dict) and k in v:
+                v = v[k]
             else:
                 return default
-        return value
-
-    def set(self, *keys: str, value: Any) -> None:
-        """Set configuration value by dot-separated key path"""
-        config = self.config
-        for key in keys[:-1]:
-            if key not in config:
-                config[key] = {}
-            config = config[key]
-        config[keys[-1]] = value
+        return v
 
     def save(self) -> None:
-        """Save configuration to file"""
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        """Persist current configuration to disk."""
         try:
-            with open(self.config_file, "w") as f:
-                json.dump(self.config, f, indent=2)
-        except IOError as e:
-            print(f"Warning: Could not save config file: {e}")
+            self.file.parent.mkdir(parents=True, exist_ok=True)
+            self.file.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
-    def reset(self) -> None:
-        """Reset configuration to defaults"""
-        self.config = DEFAULT_CONFIG.copy()
+_cfg = None
 
-
-# Global config instance
-_config_instance: Optional[Config] = None
-
-
-def get_config(config_path: Optional[str] = None) -> Config:
-    """Get or create global config instance"""
-    global _config_instance
-    if _config_instance is None or config_path:
-        _config_instance = Config(config_path)
-    return _config_instance
+def get_config(path: Optional[str] = None) -> Config:
+    """Return the singleton Config, optionally (re)loading from *path*."""
+    global _cfg
+    if not _cfg or path:
+        _cfg = Config(path)
+    return _cfg
