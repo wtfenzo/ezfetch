@@ -4,7 +4,7 @@ import argparse
 import json
 import signal
 import sys
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from . import __version__
 from .logo import get_logo, list_logos
@@ -74,12 +74,68 @@ FIELDS = [
 ]
 
 
+def _as_bool(value: Any, default: bool) -> bool:
+    """Convert common config value forms to bool with a safe default."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _as_int(value: Any, default: int, minimum: int = 0) -> int:
+    """Convert config values to int with fallback and lower bound."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, parsed)
+
+
+def _normalize_fields(value: Optional[Any]) -> Optional[List[str]]:
+    """Normalize field config/CLI input into a clean list of field names."""
+    if value is None:
+        return None
+    from_sequence = isinstance(value, (list, tuple, set))
+    if isinstance(value, str):
+        items = [value]
+    elif from_sequence:
+        items = list(value)
+    else:
+        return None
+
+    cleaned: List[str] = []
+    for item in items:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text:
+            cleaned.append(text)
+    # Preserve explicit empty lists from config/CLI (means "show no fields").
+    if from_sequence:
+        return cleaned
+    return cleaned or None
+
+
+def _normalize_theme_name(value: Any, default: str = "default") -> str:
+    if isinstance(value, str):
+        theme = value.strip()
+        return theme or default
+    return default
+
+
 def collect(enabled: Optional[List[str]] = None) -> Dict[str, str]:
     """Collect system information for all (or selected) fields."""
-    allowed = {e.lower() for e in enabled} if enabled else None
+    allowed = {e.lower() for e in enabled} if enabled is not None else None
     result = {}
     for k, fn in FIELDS:
-        if allowed and k.lower() not in allowed:
+        if allowed is not None and k.lower() not in allowed:
             continue
         try:
             result[k] = fn()
@@ -126,11 +182,12 @@ def display(
 ) -> None:
     """Render system info with optional ASCII logo and color theme."""
     cfg = get_config()
-    th = Theme(theme) if colors else None
-    enabled = fields or cfg.get("fields", "enabled")
-    info = collect(enabled)
-    hide_na = cfg.get("fields", "hide_unavailable", default=True)
-    hide_unk = cfg.get("fields", "hide_unknown", default=False)
+    th = Theme(_normalize_theme_name(theme)) if colors else None
+    enabled = fields if fields is not None else cfg.get("fields", "enabled")
+    info = collect(_normalize_fields(enabled))
+    hide_na = _as_bool(cfg.get("fields", "hide_unavailable", default=True), True)
+    hide_unk = _as_bool(cfg.get("fields", "hide_unknown", default=False), False)
+    trunc_len = _as_int(trunc, 50, minimum=0)
 
     # Filter out unavailable/unknown fields as configured
     filtered = {}
@@ -139,7 +196,7 @@ def display(
             continue
         if hide_unk and v == "Unknown":
             continue
-        filtered[k] = truncate(str(v) if v else "Unknown", trunc)
+        filtered[k] = truncate(str(v) if v else "Unknown", trunc_len)
 
     if not filtered:
         print("ezfetch: no info available to display", file=sys.stderr)
@@ -161,7 +218,9 @@ def display(
     flines = _build_info_lines(filtered, colors, th, ml)
 
     # Append color blocks
-    show_blocks = show_color_blocks and cfg.get("display", "show_color_blocks", default=True)
+    show_blocks = bool(show_color_blocks) and _as_bool(
+        cfg.get("display", "show_color_blocks", default=True), True
+    )
     if colors and show_blocks:
         flines.append("")
         flines.extend(get_color_blocks())
@@ -192,23 +251,31 @@ def main() -> None:
             return
 
         cfg = get_config(a.config)
+        cli_fields = _normalize_fields(a.field)
 
         # Temporarily disable caching if --no-cache is set
         if a.no_cache:
-            cfg.data.setdefault("performance", {})["cache_enabled"] = False
+            perf = cfg.data.get("performance") if isinstance(cfg.data, dict) else None
+            if not isinstance(perf, dict):
+                perf = {}
+                if isinstance(cfg.data, dict):
+                    cfg.data["performance"] = perf
+            perf["cache_enabled"] = False
 
         if a.json:
-            print(json.dumps(collect(a.field), indent=2))
+            print(json.dumps(collect(cli_fields), indent=2))
             return
 
         display(
             logo_name=a.logo,
             custom_logo=a.custom_logo,
-            show_logo=not a.no_logo and cfg.get("display", "show_logo", default=True),
-            theme=a.theme if a.theme is not None else cfg.get("theme", "name", default="default"),
-            colors=not a.no_color and cfg.get("display", "show_colors", default=True),
-            fields=a.field,
-            trunc=int(cfg.get("display", "truncate_length", default=50)),
+            show_logo=not a.no_logo and _as_bool(cfg.get("display", "show_logo", default=True), True),
+            theme=_normalize_theme_name(
+                a.theme if a.theme is not None else cfg.get("theme", "name", default="default")
+            ),
+            colors=not a.no_color and _as_bool(cfg.get("display", "show_colors", default=True), True),
+            fields=cli_fields,
+            trunc=_as_int(cfg.get("display", "truncate_length", default=50), 50, minimum=0),
             show_color_blocks=not a.no_color_blocks,
         )
     except KeyboardInterrupt:

@@ -62,6 +62,10 @@ class Theme:
     """Color theme for ezfetch display."""
 
     def __init__(self, name: str = "default") -> None:
+        if not isinstance(name, str):
+            name = "default"
+        else:
+            name = name.strip() or "default"
         self.colors = THEMES.get(name, THEMES["default"])
 
     def get(self, key: str) -> str:

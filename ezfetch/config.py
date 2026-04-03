@@ -39,7 +39,9 @@ class Config:
         cfg = copy.deepcopy(DEFAULTS)
         if self.file.exists():
             try:
-                _merge(cfg, json.loads(self.file.read_text(encoding="utf-8")))
+                loaded = json.loads(self.file.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    _merge(cfg, loaded)
             except (json.JSONDecodeError, OSError):
                 pass
         return cfg
@@ -56,11 +58,16 @@ class Config:
 
     def save(self) -> None:
         """Persist current configuration to disk."""
+        tmp = self.file.with_suffix(f"{self.file.suffix}.tmp")
         try:
             self.file.parent.mkdir(parents=True, exist_ok=True)
-            self.file.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+            tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+            tmp.replace(self.file)
         except OSError:
-            pass
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
 
 _cfg = None
 

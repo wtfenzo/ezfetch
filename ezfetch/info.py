@@ -31,6 +31,15 @@ _has = lambda c: shutil.which(c) is not None
 _gib = lambda b: round(b / (1 << 30), 2)
 _DMI_GARBAGE = {"to be filled by o.e.m.", "default string", "not specified", "system product name", "none", ""}
 
+
+def _env_text(key: str, default: str = "") -> str:
+    val = _env(key, default)
+    if val is None:
+        return default
+    if isinstance(val, str):
+        return val.strip()
+    return str(val).strip()
+
 def _cmd(c: str, timeout: int = 5) -> Optional[str]:
     """Run a shell command and return stripped stdout, or None on failure."""
     try:
@@ -58,9 +67,22 @@ def _fread(*parts) -> Optional[str]:
         return None
 
 
+def _format_hz(value: object) -> Optional[str]:
+    try:
+        hz = float(value)
+    except (TypeError, ValueError):
+        return None
+    if hz <= 0:
+        return None
+    rounded = round(hz, 2)
+    if rounded.is_integer():
+        return str(int(rounded))
+    return f"{rounded:.2f}".rstrip("0").rstrip(".")
+
+
 def get_user_host() -> str:
     """Return 'user@hostname' string."""
-    user = _env('USER') or _env('USERNAME', '?')
+    user = _env_text("USER") or _env_text("USERNAME", "?")
     return f"{user}@{socket.gethostname()}"
 
 @cached("host", ttl=3600)
@@ -171,7 +193,7 @@ def get_packages():
 @cached("shell", ttl=3600)
 def get_shell():
     """Detect the current shell name and version."""
-    path = _env("SHELL") or _env("ComSpec", "")
+    path = _env_text("SHELL") or _env_text("ComSpec")
     if not path:
         return "Unknown"
     name = os.path.basename(path)
@@ -198,7 +220,7 @@ def get_resolution():
     """Detect the screen resolution."""
     def _do():
         if S == "Linux":
-            st = _env("XDG_SESSION_TYPE", "").lower()
+            st = _env_text("XDG_SESSION_TYPE").lower()
             if st == "wayland":
                 if _has("hyprctl"):
                     out = _cmd("hyprctl monitors -j")
@@ -207,7 +229,10 @@ def get_resolution():
                             monitors = json.loads(out)
                             if monitors:
                                 m = monitors[0]
-                                return f"{m['width']}x{m['height']} @ {m.get('refreshRate', '?')} Hz"
+                                hz = _format_hz(m.get("refreshRate"))
+                                if hz:
+                                    return f"{m['width']}x{m['height']} @ {hz} Hz"
+                                return f"{m['width']}x{m['height']}"
                         except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                             pass
                 if _has("swaymsg"):
@@ -220,7 +245,7 @@ def get_resolution():
                                     w, h = m.get("width"), m.get("height")
                                     if w and h:
                                         ref = m.get("refresh", 0)
-                                        hz = round(ref / 1000) if ref > 1000 else ref
+                                        hz = _format_hz(ref / 1000 if ref > 1000 else ref)
                                         return f"{w}x{h} @ {hz} Hz" if hz else f"{w}x{h}"
                         except (json.JSONDecodeError, KeyError, TypeError):
                             pass
@@ -258,7 +283,7 @@ def get_desktop_env():
             return "Aqua"
         if S == "Windows":
             return "Windows Shell"
-        env = (_env("XDG_CURRENT_DESKTOP") or _env("DESKTOP_SESSION") or "").strip()
+        env = _env_text("XDG_CURRENT_DESKTOP") or _env_text("DESKTOP_SESSION")
         if not env:
             return None
         el = env.lower()
@@ -281,9 +306,9 @@ def get_window_manager():
             return "Quartz WM"
         if S == "Windows":
             return "DWM"
-        st = _env("XDG_SESSION_TYPE", "").lower()
+        st = _env_text("XDG_SESSION_TYPE").lower()
         if st == "wayland":
-            desk = _env("XDG_CURRENT_DESKTOP", "").lower()
+            desk = _env_text("XDG_CURRENT_DESKTOP").lower()
             if "hyprland" in desk:
                 out = _cmd("hyprctl version -j")
                 if out:
@@ -298,7 +323,7 @@ def get_window_manager():
                 return "KWin (Wayland)"
             if "gnome" in desk:
                 return "Mutter (Wayland)"
-            d = _env('XDG_CURRENT_DESKTOP', '')
+            d = _env_text("XDG_CURRENT_DESKTOP")
             return f"Wayland ({d})" if d else "Wayland"
         if _has("wmctrl"):
             out = _cmd("wmctrl -m")
@@ -348,13 +373,13 @@ _TERMINAL_NAMES = {
 def get_terminal() -> str:
     """Detect the terminal emulator by walking the process tree."""
     for v in ("TERM_PROGRAM", "TERMINAL_EMULATOR"):
-        t = _env(v)
+        t = _env_text(v)
         if t:
             return _TERMINAL_NAMES.get(t.lower().replace(" ", "-"), t)
     if S == "Windows":
-        if _env("WT_SESSION"):
+        if _env_text("WT_SESSION"):
             return "Windows Terminal"
-        if _env("ConEmuPID"):
+        if _env_text("ConEmuPID"):
             return "ConEmu"
 
     def _is_shell_or_wrapper(name: str) -> bool:
@@ -384,7 +409,8 @@ def get_terminal() -> str:
                 break
     except Exception:
         pass
-    return _env("TERM", "Unknown")
+    term = _env_text("TERM", "Unknown")
+    return term or "Unknown"
 
 @cached("cpu", ttl=600)
 def get_cpu():
@@ -536,7 +562,7 @@ def get_battery():
 def get_locale():
     """Return the system locale."""
     try:
-        return locale.getlocale()[0] or _env("LANG", "Unknown").split(".")[0]
+        return locale.getlocale()[0] or _env_text("LANG", "Unknown").split(".")[0]
     except Exception:
         return "Unknown"
 

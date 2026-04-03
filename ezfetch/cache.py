@@ -32,20 +32,33 @@ class Cache:
 
     def get(self, key: str, ttl: int = 300) -> Optional[Any]:
         """Return cached value if it exists and hasn't expired, else None."""
+        if ttl <= 0:
+            return None
         try:
             d = json.loads(self._path(key).read_text(encoding="utf-8"))
-            return d["v"] if time.time() - d["t"] < ttl else None
+            if not isinstance(d, dict):
+                return None
+            ts = d.get("t")
+            if not isinstance(ts, (int, float)):
+                return None
+            if time.time() - float(ts) >= ttl:
+                return None
+            return d.get("v")
         except Exception:
             return None
 
     def set(self, key: str, val: Any) -> None:
         """Write a value to the cache."""
+        path = self._path(key)
+        tmp_path = path.with_suffix(".tmp")
         try:
-            self._path(key).write_text(
-                json.dumps({"t": time.time(), "v": val}), encoding="utf-8"
-            )
+            tmp_path.write_text(json.dumps({"t": time.time(), "v": val}), encoding="utf-8")
+            tmp_path.replace(path)
         except Exception:
-            pass
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
 
     def clear(self, key: Optional[str] = None) -> None:
         """Remove one or all cached entries."""
@@ -61,7 +74,7 @@ class Cache:
 
 _cache = None
 
-def get_cache():
+def get_cache() -> Cache:
     global _cache
     if not _cache:
         _cache = Cache()
@@ -70,7 +83,7 @@ def get_cache():
 def cached(key: str, ttl: int = 300):
     """Decorator that caches a function's return value to disk.
 
-    Skips caching if the result is falsy or 'Unknown'.
+    Skips caching if the result is None or 'Unknown'.
     Respects 'performance.cache_enabled' and 'performance.cache_duration'.
     """
     def dec(fn):
@@ -90,7 +103,7 @@ def cached(key: str, ttl: int = 300):
             except Exception:
                 pass
 
-            if not cache_enabled:
+            if not cache_enabled or effective_ttl <= 0:
                 return fn(*args, **kwargs)
 
             c = get_cache()
@@ -98,7 +111,7 @@ def cached(key: str, ttl: int = 300):
             if v is not None:
                 return v
             result = fn(*args, **kwargs)
-            if result and result != "Unknown":
+            if result is not None and result != "Unknown":
                 c.set(key, result)
             return result
         return wrapper

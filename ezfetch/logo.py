@@ -318,12 +318,18 @@ def detect_distro() -> str:
 
 def get_logo(name: Optional[str] = None, custom_path: Optional[str] = None) -> str:
     """Return ASCII logo art for the given distro name, or auto-detect."""
-    if custom_path:
+    if isinstance(custom_path, (str, Path)) and custom_path:
         try:
             return Path(custom_path).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError, TypeError, ValueError):
             pass
-    return LOGOS.get((name or detect_distro()).lower(), LOGOS["linux"])
+    if isinstance(name, str):
+        key = name.strip().lower()
+    elif name is None:
+        key = detect_distro()
+    else:
+        key = str(name).strip().lower()
+    return LOGOS.get(key or detect_distro(), LOGOS["linux"])
 
 
 def list_logos() -> List[str]:
