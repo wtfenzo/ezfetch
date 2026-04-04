@@ -16,7 +16,20 @@ This guide provides solutions to common issues and errors you may encounter when
 ## Common Issues
 
 ### 1. Command Not Found
-- Make sure you are running `python3 -m ezfetch` from the project directory, or that `ezfetch` is installed in your PATH if using pip/pipx.
+- Install globally with one of these options:
+  - `make install-global`
+  - `pipx install .`
+  - `bash scripts/install.sh`
+- Verify installation and PATH:
+  ```bash
+  command -v ezfetch
+  ezfetch --version
+  ```
+- If it is still not found, add `~/.local/bin` to PATH:
+  ```bash
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+  source ~/.bashrc
+  ```
 
 ### 2. ImportError: No module named 'psutil'
 - Run `pip install -r requirements.txt` in the project directory to install dependencies.
@@ -35,14 +48,32 @@ This guide provides solutions to common issues and errors you may encounter when
   make test
   make build
   ```
+- For global command installation on PEP 668 systems, prefer `pipx`:
+  ```bash
+  pipx install .
+  ```
+- If you see this error:
+  `externally-managed-environment`
+  it means direct `pip install --user .` is blocked by your distro policy. Use `pipx` or `bash scripts/install.sh`.
 - If you see errors about missing modules, run:
   ```bash
   pip install -r requirements.txt
   ```
-- For pipx users:
-  ```bash
-  pipx install .
-  ```
+
+## Installation Validation
+
+Run these checks after installing globally:
+
+```bash
+make doctor
+```
+
+or manually:
+
+```bash
+ezfetch --json --no-cache
+(cd /tmp && ezfetch --version)
+```
 
 ---
 

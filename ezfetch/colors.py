@@ -14,14 +14,35 @@ _COLORS: Dict[str, int] = {
 }
 
 
+def _to_text(value: object, default: str = "") -> str:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
+def _to_channel(value: object) -> int:
+    try:
+        n = int(value)
+    except Exception:
+        return 0
+    return max(0, min(255, n))
+
+
 def rgb(r: int, g: int, b: int, bg: bool = False) -> str:
     """Return an ANSI 24-bit (truecolor) escape sequence."""
-    return f"\033[{48 if bg else 38};2;{r};{g};{b}m"
+    return f"\033[{48 if bg else 38};2;{_to_channel(r)};{_to_channel(g)};{_to_channel(b)}m"
 
 
 def from_hex(h: str, bg: bool = False) -> str:
     """Convert a hex color string (e.g. '#FF5500' or '#F50') to an ANSI escape sequence."""
-    h = h.lstrip('#')
+    if not isinstance(h, str):
+        return ""
+    h = h.strip().lstrip('#')
     # Expand 3-char shorthand (#F50 → #FF5500)
     if len(h) == 3 and all(c in '0123456789abcdefABCDEF' for c in h):
         h = h[0] * 2 + h[1] * 2 + h[2] * 2
@@ -31,13 +52,18 @@ def from_hex(h: str, bg: bool = False) -> str:
 
 def color(name: str) -> str:
     """Return the ANSI escape sequence for a named color."""
-    code = _COLORS.get(name.lower().replace(" ", "_"))
+    if not isinstance(name, str):
+        return ""
+    code = _COLORS.get(name.strip().lower().replace(" ", "_"))
     return _C(code) if code else ""
 
 
 def colorize(text: str, c: Optional[str], reset: bool = True) -> str:
     """Wrap text in an ANSI color sequence."""
+    text = _to_text(text, "")
     if not c:
+        return text
+    if not isinstance(c, str):
         return text
     if not c.startswith('\033'):
         c = color(c)
@@ -47,6 +73,9 @@ def colorize(text: str, c: Optional[str], reset: bool = True) -> str:
 
 def strip_ansi(text: str) -> str:
     """Remove ANSI escape sequences from a string."""
+    text = _to_text(text, "")
+    if not text:
+        return ""
     return re.sub(r'\033\[[0-9;]*m', '', text)
 
 THEMES = {
@@ -70,7 +99,10 @@ class Theme:
 
     def get(self, key: str) -> str:
         """Return the ANSI escape sequence for the given theme component."""
-        return self.colors.get(key, "")
+        try:
+            return self.colors.get(_to_text(key, ""), "")
+        except Exception:
+            return ""
 
     @staticmethod
     def list_themes() -> List[str]:

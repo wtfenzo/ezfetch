@@ -1,5 +1,7 @@
 """ezfetch - A fast, cross-platform terminal system info tool."""
 
+from typing import Any
+
 __version__ = "1.3.0"
 __all__ = ["__version__", "main", "display"]
 
@@ -10,7 +12,7 @@ def main():
     return _main()
 
 
-def display(**kwargs):
+def display(*args: Any, **kwargs: Any):
     """Public display API (lazy import)."""
     from .__main__ import display as _display
-    return _display(**kwargs)
+    return _display(*args, **kwargs)

@@ -1,8 +1,10 @@
-.PHONY: build clean install uninstall deps lint test
+.PHONY: build clean install uninstall deps lint test install-global uninstall-global doctor
 
 INSTALL_DIR ?= /usr/local/bin
 BIN_NAME    := ezfetch
 VENV_DIR    ?= .venv
+USER_BIN_DIR ?= $(HOME)/.local/bin
+FALLBACK_USER_VENV ?= $(HOME)/.local/share/ezfetch/venv
 PYTHON      := $(VENV_DIR)/bin/python
 SYSTEM_PY   ?= /bin/python3
 PY_FILES    := $(shell find ezfetch -name '*.py' -not -path '*__pycache__*')
@@ -53,6 +55,19 @@ uninstall:
 	@echo "[Removed] $(INSTALL_DIR)/$(BIN_NAME)"
 
 
+install-global:
+	bash ./scripts/install.sh
+
+
+uninstall-global:
+	@if command -v pipx >/dev/null 2>&1; then \
+		pipx uninstall ezfetch >/dev/null 2>&1 || true; \
+	fi
+	rm -f $(USER_BIN_DIR)/$(BIN_NAME)
+	rm -rf $(FALLBACK_USER_VENV)
+	@echo "[Removed] global user install entries for $(BIN_NAME)"
+
+
 clean:
 	rm -rf build/ dist/ __pycache__ ezfetch/__pycache__
 	rm -rf *.egg-info
@@ -84,3 +99,13 @@ test: deps
 	fi; \
 	$$PY -m ezfetch --json --no-cache | $$PY -m json.tool > /dev/null
 	@echo "[Test] JSON output OK"
+
+
+doctor: test
+	@if command -v $(BIN_NAME) >/dev/null 2>&1; then \
+		( cd /tmp && $(BIN_NAME) --json --no-cache > /dev/null ); \
+		echo "[Doctor] global command works from /tmp"; \
+	else \
+		echo "[Doctor] $(BIN_NAME) is not in PATH. Run 'make install-global'"; \
+		exit 1; \
+	fi

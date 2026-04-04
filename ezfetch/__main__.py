@@ -4,7 +4,7 @@ import argparse
 import json
 import signal
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import __version__
 from .logo import get_logo, list_logos
@@ -73,6 +73,8 @@ FIELDS = [
     ("Locale", get_locale),
 ]
 
+_FIELD_LOOKUP = {name.lower(): name for name, _ in FIELDS}
+
 
 def _as_bool(value: Any, default: bool) -> bool:
     """Convert common config value forms to bool with a safe default."""
@@ -98,6 +100,18 @@ def _as_int(value: Any, default: int, minimum: int = 0) -> int:
     return max(minimum, parsed)
 
 
+def _safe_text(value: Any, default: str = "") -> str:
+    """Safely coerce a value to text with fallback for bad __str__ implementations."""
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value
+    try:
+        return str(value)
+    except Exception:
+        return default
+
+
 def _normalize_fields(value: Optional[Any]) -> Optional[List[str]]:
     """Normalize field config/CLI input into a clean list of field names."""
     if value is None:
@@ -114,7 +128,7 @@ def _normalize_fields(value: Optional[Any]) -> Optional[List[str]]:
     for item in items:
         if item is None:
             continue
-        text = str(item).strip()
+        text = _safe_text(item).strip()
         if text:
             cleaned.append(text)
     # Preserve explicit empty lists from config/CLI (means "show no fields").
@@ -130,15 +144,36 @@ def _normalize_theme_name(value: Any, default: str = "default") -> str:
     return default
 
 
-def collect(enabled: Optional[List[str]] = None) -> Dict[str, str]:
+def _split_requested_fields(value: Optional[Any]) -> Tuple[Optional[List[str]], List[str]]:
+    normalized = _normalize_fields(value)
+    if normalized is None:
+        return None, []
+
+    known: List[str] = []
+    unknown: List[str] = []
+    seen: Set[str] = set()
+    for item in normalized:
+        canonical = _FIELD_LOOKUP.get(item.lower())
+        if canonical is None:
+            unknown.append(item)
+            continue
+        if canonical not in seen:
+            seen.add(canonical)
+            known.append(canonical)
+    return known, unknown
+
+
+def collect(enabled: Optional[Any] = None) -> Dict[str, str]:
     """Collect system information for all (or selected) fields."""
-    allowed = {e.lower() for e in enabled} if enabled is not None else None
+    normalized = _normalize_fields(enabled)
+    allowed = {e.lower() for e in normalized} if normalized is not None else None
     result = {}
     for k, fn in FIELDS:
         if allowed is not None and k.lower() not in allowed:
             continue
         try:
-            result[k] = fn()
+            text = _safe_text(fn(), "Unknown")
+            result[k] = text if text else "Unknown"
         except Exception:
             result[k] = "Unknown"
     return result
@@ -196,7 +231,8 @@ def display(
             continue
         if hide_unk and v == "Unknown":
             continue
-        filtered[k] = truncate(str(v) if v else "Unknown", trunc_len)
+        text = _safe_text(v, "Unknown")
+        filtered[k] = truncate(text if text else "Unknown", trunc_len)
 
     if not filtered:
         print("ezfetch: no info available to display", file=sys.stderr)
@@ -218,7 +254,7 @@ def display(
     flines = _build_info_lines(filtered, colors, th, ml)
 
     # Append color blocks
-    show_blocks = bool(show_color_blocks) and _as_bool(
+    show_blocks = _as_bool(show_color_blocks, True) and _as_bool(
         cfg.get("display", "show_color_blocks", default=True), True
     )
     if colors and show_blocks:
@@ -251,7 +287,16 @@ def main() -> None:
             return
 
         cfg = get_config(a.config)
-        cli_fields = _normalize_fields(a.field)
+        cli_fields, unknown_fields = _split_requested_fields(a.field)
+
+        if unknown_fields:
+            choices = ", ".join(name for name, _ in FIELDS)
+            requested = ", ".join(unknown_fields)
+            print(
+                f"ezfetch: warning: unknown field(s): {requested}. "
+                f"Available fields: {choices}",
+                file=sys.stderr,
+            )
 
         # Temporarily disable caching if --no-cache is set
         if a.no_cache:

@@ -29,7 +29,29 @@ class Config:
     """Application configuration backed by a JSON file."""
 
     def __init__(self, path: Optional[str] = None) -> None:
-        self.file = Path(path) if path else Path.home() / ".config" / "ezfetch" / "config.json"
+        default_file = Path.home() / ".config" / "ezfetch" / "config.json"
+        candidate: Path = default_file
+        if path is None:
+            candidate = default_file
+        elif isinstance(path, str):
+            raw = path.strip()
+            if raw:
+                try:
+                    candidate = Path(raw).expanduser()
+                except Exception:
+                    candidate = default_file
+        else:
+            try:
+                candidate = Path(path).expanduser()
+            except Exception:
+                candidate = default_file
+
+        # Reject directory-like targets such as '.' and '/'.
+        try:
+            self.file = default_file if candidate.name == "" or candidate.is_dir() else candidate
+        except OSError:
+            self.file = default_file
+
         file_existed = self.file.exists()
         self.data: dict = self._load()
         if not file_existed:
@@ -42,7 +64,7 @@ class Config:
                 loaded = json.loads(self.file.read_text(encoding="utf-8"))
                 if isinstance(loaded, dict):
                     _merge(cfg, loaded)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 pass
         return cfg
 
@@ -50,30 +72,37 @@ class Config:
         """Traverse nested config keys, returning *default* if any key is missing."""
         v = self.data
         for k in keys:
-            if isinstance(v, dict) and k in v:
-                v = v[k]
-            else:
+            if not isinstance(v, dict):
+                return default
+            try:
+                if k in v:
+                    v = v[k]
+                else:
+                    return default
+            except TypeError:
                 return default
         return v
 
     def save(self) -> None:
         """Persist current configuration to disk."""
-        tmp = self.file.with_suffix(f"{self.file.suffix}.tmp")
+        tmp = None
         try:
+            tmp = self.file.with_suffix(f"{self.file.suffix}.tmp")
             self.file.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
             tmp.replace(self.file)
-        except OSError:
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+        except Exception:
+            if tmp is not None:
+                try:
+                    tmp.unlink()
+                except Exception:
+                    pass
 
 _cfg = None
 
 def get_config(path: Optional[str] = None) -> Config:
     """Return the singleton Config, optionally (re)loading from *path*."""
     global _cfg
-    if not _cfg or path:
+    if _cfg is None or path is not None:
         _cfg = Config(path)
     return _cfg

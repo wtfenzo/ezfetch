@@ -328,7 +328,10 @@ def get_logo(name: Optional[str] = None, custom_path: Optional[str] = None) -> s
     elif name is None:
         key = detect_distro()
     else:
-        key = str(name).strip().lower()
+        try:
+            key = str(name).strip().lower()
+        except Exception:
+            key = ""
     return LOGOS.get(key or detect_distro(), LOGOS["linux"])
 
 

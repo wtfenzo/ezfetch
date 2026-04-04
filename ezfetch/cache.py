@@ -10,8 +10,31 @@ from typing import Any, Optional
 _SAFE_KEY = re.compile(r'^[a-zA-Z0-9_-]+$')
 
 
+def _to_bool(value: Any, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        v = value.strip().lower()
+        if v in {"1", "true", "yes", "on"}:
+            return True
+        if v in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _to_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def _sanitize_key(key: str) -> str:
     """Sanitize cache key to prevent path traversal."""
+    if not isinstance(key, str):
+        key = str(key)
     if not _SAFE_KEY.match(key):
         raise ValueError(f"Invalid cache key: {key!r}")
     return key
@@ -32,6 +55,7 @@ class Cache:
 
     def get(self, key: str, ttl: int = 300) -> Optional[Any]:
         """Return cached value if it exists and hasn't expired, else None."""
+        ttl = _to_int(ttl, 300)
         if ttl <= 0:
             return None
         try:
@@ -49,22 +73,24 @@ class Cache:
 
     def set(self, key: str, val: Any) -> None:
         """Write a value to the cache."""
-        path = self._path(key)
-        tmp_path = path.with_suffix(".tmp")
+        tmp_path = None
         try:
+            path = self._path(key)
+            tmp_path = path.with_suffix(".tmp")
             tmp_path.write_text(json.dumps({"t": time.time(), "v": val}), encoding="utf-8")
             tmp_path.replace(path)
         except Exception:
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
 
     def clear(self, key: Optional[str] = None) -> None:
         """Remove one or all cached entries."""
         try:
-            targets = [self._path(key)] if key else list(self.dir.glob("*.json"))
-        except ValueError:
+            targets = [self._path(key)] if key is not None else list(self.dir.glob("*.json"))
+        except Exception:
             return
         for f in targets:
             try:
@@ -76,7 +102,7 @@ _cache = None
 
 def get_cache() -> Cache:
     global _cache
-    if not _cache:
+    if _cache is None:
         _cache = Cache()
     return _cache
 
@@ -94,7 +120,7 @@ def cached(key: str, ttl: int = 300):
             try:
                 from .config import get_config
                 cfg = get_config()
-                cache_enabled = cfg.get("performance", "cache_enabled", default=True)
+                cache_enabled = _to_bool(cfg.get("performance", "cache_enabled", default=True), True)
                 configured_ttl = cfg.get("performance", "cache_duration", default=ttl)
                 try:
                     effective_ttl = max(0, int(configured_ttl))

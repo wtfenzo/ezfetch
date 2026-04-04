@@ -10,10 +10,16 @@ import glob
 import locale
 import shutil
 import json
+import math
+import ipaddress
+import getpass
 from pathlib import Path
 from typing import List, Optional
 
-import psutil
+try:
+    import psutil
+except Exception:
+    psutil = None
 from .cache import cached
 from .utils import truncate
 
@@ -33,20 +39,36 @@ _DMI_GARBAGE = {"to be filled by o.e.m.", "default string", "not specified", "sy
 
 
 def _env_text(key: str, default: str = "") -> str:
-    val = _env(key, default)
+    if isinstance(default, str):
+        fallback = default
+    else:
+        try:
+            fallback = str(default)
+        except Exception:
+            fallback = ""
+
+    val = _env(key, fallback)
     if val is None:
-        return default
+        return fallback
     if isinstance(val, str):
         return val.strip()
-    return str(val).strip()
+    try:
+        return str(val).strip()
+    except Exception:
+        return fallback
 
 def _cmd(c: str, timeout: int = 5) -> Optional[str]:
     """Run a shell command and return stripped stdout, or None on failure."""
     try:
         return subprocess.check_output(
-            c, shell=True, text=True, stderr=subprocess.DEVNULL, timeout=timeout
+            c,
+            shell=True,
+            encoding="utf-8",
+            errors="replace",
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
         ).strip()
-    except (subprocess.SubprocessError, OSError):
+    except (subprocess.SubprocessError, UnicodeDecodeError, OSError):
         return None
 
 
@@ -72,6 +94,8 @@ def _format_hz(value: object) -> Optional[str]:
         hz = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(hz):
+        return None
     if hz <= 0:
         return None
     rounded = round(hz, 2)
@@ -80,10 +104,29 @@ def _format_hz(value: object) -> Optional[str]:
     return f"{rounded:.2f}".rstrip("0").rstrip(".")
 
 
+def _safe_hostname(default: str = "unknown-host") -> str:
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        return default
+    if isinstance(hostname, str):
+        return hostname.strip() or default
+    try:
+        text = str(hostname).strip()
+        return text or default
+    except Exception:
+        return default
+
+
 def get_user_host() -> str:
     """Return 'user@hostname' string."""
-    user = _env_text("USER") or _env_text("USERNAME", "?")
-    return f"{user}@{socket.gethostname()}"
+    user = _env_text("USER") or _env_text("USERNAME")
+    if not user:
+        try:
+            user = getpass.getuser().strip()
+        except Exception:
+            user = "?"
+    return f"{user}@{_safe_hostname()}"
 
 @cached("host", ttl=3600)
 def get_host() -> str:
@@ -120,29 +163,66 @@ def get_os():
         except Exception:
             pass
     elif S == "Darwin":
-        ver = platform.mac_ver()[0]
+        try:
+            ver = platform.mac_ver()[0]
+        except Exception:
+            ver = ""
         if ver:
             return f"macOS {ver}"
     elif S == "Windows":
-        rel = platform.release()
-        edition = platform.win32_edition() if hasattr(platform, 'win32_edition') else ""
-        ver = platform.version()
+        try:
+            rel = platform.release()
+        except Exception:
+            rel = ""
+        try:
+            edition = platform.win32_edition() if hasattr(platform, 'win32_edition') else ""
+        except Exception:
+            edition = ""
+        try:
+            ver = platform.version()
+        except Exception:
+            ver = ""
         parts = ["Windows", rel]
         if edition:
             parts.append(edition)
-        return f"{' '.join(parts)} ({ver})"
-    return f"{S} {platform.release()}"
+        base = " ".join(p for p in parts if p) or "Windows"
+        return f"{base} ({ver})" if ver else base
+    try:
+        rel = platform.release()
+    except Exception:
+        rel = ""
+    return f"{S} {rel}".strip() if rel else (S or "Unknown")
 
 @cached("kernel", ttl=3600)
 def get_kernel():
     """Return the kernel version string."""
     if S == "Windows":
-        return platform.version()
-    return platform.release()
+        try:
+            return platform.version()
+        except Exception:
+            try:
+                return platform.release()
+            except Exception:
+                return "Unknown"
+    try:
+        return platform.release()
+    except Exception:
+        return "Unknown"
 
 def get_uptime():
     def _do():
-        s = int(time.time() - psutil.boot_time())
+        if psutil is not None:
+            s = int(time.time() - psutil.boot_time())
+        elif S == "Linux":
+            up = _fread("/proc/uptime")
+            if not up:
+                return None
+            try:
+                s = int(float(up.split()[0]))
+            except (TypeError, ValueError, IndexError):
+                return None
+        else:
+            return None
         d, s = divmod(s, 86400)
         h, s = divmod(s, 3600)
         m, _ = divmod(s, 60)
@@ -245,7 +325,11 @@ def get_resolution():
                                     w, h = m.get("width"), m.get("height")
                                     if w and h:
                                         ref = m.get("refresh", 0)
-                                        hz = _format_hz(ref / 1000 if ref > 1000 else ref)
+                                        try:
+                                            ref_value = float(ref)
+                                        except (TypeError, ValueError):
+                                            ref_value = None
+                                        hz = _format_hz(ref_value / 1000 if ref_value and ref_value > 1000 else ref_value)
                                         return f"{w}x{h} @ {hz} Hz" if hz else f"{w}x{h}"
                         except (json.JSONDecodeError, KeyError, TypeError):
                             pass
@@ -381,6 +465,9 @@ def get_terminal() -> str:
             return "Windows Terminal"
         if _env_text("ConEmuPID"):
             return "ConEmu"
+    if psutil is None:
+        term = _env_text("TERM", "Unknown")
+        return term or "Unknown"
 
     def _is_shell_or_wrapper(name: str) -> bool:
         n = name.lower()
@@ -397,7 +484,7 @@ def get_terminal() -> str:
             try:
                 proc = psutil.Process(pid)
                 name = (proc.name() or "").strip()
-            except (OSError, PermissionError):
+            except Exception:
                 break
             if name and not _is_shell_or_wrapper(name):
                 key = name.lower().replace(" ", "-")
@@ -405,7 +492,7 @@ def get_terminal() -> str:
             try:
                 parent = proc.parent()
                 pid = parent.pid if parent else 0
-            except (psutil.Error, OSError, ValueError):
+            except Exception:
                 break
     except Exception:
         pass
@@ -441,9 +528,9 @@ def get_cpu():
                 name = platform.processor() or name
         else:
             name = platform.processor() or name
-        freq = psutil.cpu_freq()
-        cores = psutil.cpu_count(logical=False)
-        threads = psutil.cpu_count()
+        freq = psutil.cpu_freq() if psutil is not None else None
+        cores = psutil.cpu_count(logical=False) if psutil is not None else os.cpu_count()
+        threads = psutil.cpu_count() if psutil is not None else os.cpu_count()
         if cores and threads:
             core_info = f"{cores}C/{threads}T" if cores != threads else str(threads)
         else:
@@ -484,27 +571,61 @@ def get_gpu():
 def get_memory():
     """Return used/total RAM with percentage."""
     try:
-        m = psutil.virtual_memory()
-        return f"{_gib(m.used)} GiB / {_gib(m.total)} GiB ({round(m.percent)}%)"
+        if psutil is not None:
+            m = psutil.virtual_memory()
+            return f"{_gib(m.used)} GiB / {_gib(m.total)} GiB ({round(m.percent)}%)"
+        if S == "Linux":
+            data = {}
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    data[key.strip()] = val.strip()
+            total = int(data.get("MemTotal", "0 kB").split()[0]) * 1024
+            avail = int(data.get("MemAvailable", "0 kB").split()[0]) * 1024
+            if total > 0:
+                used = max(0, total - avail)
+                pct = round((used / total) * 100)
+                return f"{_gib(used)} GiB / {_gib(total)} GiB ({pct}%)"
     except Exception:
-        return "Unknown"
+        pass
+    return "Unknown"
 
 def get_swap():
     """Return used/total swap with percentage."""
     try:
-        s = psutil.swap_memory()
-        if s.total == 0:
-            return "N/A"
-        pct = round(s.percent) if hasattr(s, 'percent') else int(s.used / s.total * 100)
-        return f"{_gib(s.used)} GiB / {_gib(s.total)} GiB ({pct}%)"
+        if psutil is not None:
+            s = psutil.swap_memory()
+            if s.total == 0:
+                return "N/A"
+            pct = round(s.percent) if hasattr(s, 'percent') else int(s.used / s.total * 100)
+            return f"{_gib(s.used)} GiB / {_gib(s.total)} GiB ({pct}%)"
+        if S == "Linux":
+            data = {}
+            for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+                if ":" in line:
+                    key, val = line.split(":", 1)
+                    data[key.strip()] = val.strip()
+            total = int(data.get("SwapTotal", "0 kB").split()[0]) * 1024
+            free = int(data.get("SwapFree", "0 kB").split()[0]) * 1024
+            if total == 0:
+                return "N/A"
+            used = max(0, total - free)
+            pct = round((used / total) * 100)
+            return f"{_gib(used)} GiB / {_gib(total)} GiB ({pct}%)"
     except Exception:
-        return "Unknown"
+        pass
+    return "Unknown"
 
 def get_disk():
     """Return used/total disk space with filesystem type on Linux."""
     try:
-        d = psutil.disk_usage("/")
-        base = f"{_gib(d.used)} GiB / {_gib(d.total)} GiB ({round(d.percent)}%)"
+        d = psutil.disk_usage("/") if psutil is not None else shutil.disk_usage("/")
+        used = int(getattr(d, "used", 0))
+        total = int(getattr(d, "total", 0))
+        if total <= 0:
+            return "Unknown"
+        pct = round((used / total) * 100)
+        base = f"{_gib(used)} GiB / {_gib(total)} GiB ({pct}%)"
         if S == "Linux":
             fs = _cmd("df -T / | tail -1 | awk '{print $2}'")
             if fs:
@@ -521,13 +642,26 @@ def get_ip() -> str:
         sock.settimeout(2)
         sock.connect(("8.8.8.8", 80))
         ip = sock.getsockname()[0]
-        if S == "Linux":
-            out = _cmd(f"ip -o addr show | grep -wF '{ip}'")
-            if out:
-                parts = out.splitlines()[0].split()
-                iface = parts[1] if len(parts) > 1 else None
-                cidr = parts[3] if len(parts) > 3 else ip
-                return f"{cidr} ({iface})" if iface else cidr
+        if S == "Linux" and psutil is not None:
+            try:
+                for iface, addrs in psutil.net_if_addrs().items():
+                    for addr in addrs:
+                        if addr.family != socket.AF_INET or addr.address != ip:
+                            continue
+                        cidr = ip
+                        netmask = getattr(addr, "netmask", None)
+                        if netmask:
+                            try:
+                                prefix = ipaddress.IPv4Network(
+                                    f"0.0.0.0/{netmask}",
+                                    strict=False,
+                                ).prefixlen
+                                cidr = f"{ip}/{prefix}"
+                            except Exception:
+                                pass
+                        return f"{cidr} ({iface})" if iface else cidr
+            except Exception:
+                pass
         return ip
     except Exception:
         return "Unavailable"
@@ -549,6 +683,8 @@ def get_battery():
             st = (bp / "status").read_text(encoding="utf-8").strip().lower()
             label = "Charging" if st == "charging" else "Full" if st == "full" else "Discharging"
             return f"{cap}% [{label}]"
+        if psutil is None:
+            return "N/A"
         b = psutil.sensors_battery()
         if not b:
             return "N/A"
